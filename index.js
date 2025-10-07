@@ -701,24 +701,46 @@ initializeDataFiles().then(() => {
     client.login(config.DISCORD_TOKEN);
 });
 
+// Test endpoint to verify webhook connectivity
+app.get('/webhook', (req, res) => {
+    res.json({ 
+        status: 'Webhook endpoint is reachable', 
+        timestamp: new Date().toISOString(),
+        bot: 'Priv9 Payments'
+    });
+});
+
 app.post('/webhook', async (req, res) => {
     try {
-        console.log('📦 Received webhook:', req.body);
+        console.log('📦 Webhook received at:', new Date().toISOString());
+        console.log('📦 Headers:', req.headers);
+        console.log('📦 Body:', req.body);
         
         const signature = req.headers['x-fungies-signature'];
+        console.log('📦 Signature:', signature);
+        
         if (!verifyWebhookSignature(req.body, signature)) {
             console.log('❌ Invalid webhook signature');
             return res.status(401).send('Unauthorized');
         }
+        
+        console.log('✅ Webhook signature verified');
 
         const { event, data } = req.body;
+        console.log('📦 Event type:', event);
+        console.log('📦 Event data:', data);
 
         if (event === 'payment.completed') {
+            console.log('💰 Processing payment.completed event');
             await handlePaymentCompleted(data);
         } else if (event === 'payment.failed') {
+            console.log('❌ Processing payment.failed event');
             await handlePaymentFailed(data);
         } else if (event === 'payment.refunded') {
+            console.log('💸 Processing payment.refunded event');
             await handlePaymentRefunded(data);
+        } else {
+            console.log('❓ Unknown event type:', event);
         }
 
         res.status(200).send('OK');
@@ -739,14 +761,23 @@ function verifyWebhookSignature(payload, signature) {
 
 async function handlePaymentCompleted(paymentData) {
     try {
-        console.log('✅ Payment completed:', paymentData);
+        console.log('✅ Payment completed - Full data:', JSON.stringify(paymentData, null, 2));
         
         const { customer_id, product_id, amount, payment_id, custom_data } = paymentData;
+        console.log('📦 Extracted data:');
+        console.log('  - customer_id:', customer_id);
+        console.log('  - product_id:', product_id);
+        console.log('  - amount:', amount);
+        console.log('  - payment_id:', payment_id);
+        console.log('  - custom_data:', custom_data);
         
         let productType = null;
+        console.log('🔍 Looking for product type for product_id:', product_id);
         for (const [type, product] of Object.entries(PRODUCTS)) {
+            console.log(`  - Checking ${type}: ${product.productId}`);
             if (product.productId === product_id) {
                 productType = type;
+                console.log(`✅ Found matching product type: ${productType}`);
                 break;
             }
         }
