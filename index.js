@@ -41,7 +41,6 @@ function validateEnvironmentVariables() {
         'PRODUCT_ID_MONTHLY',
         'PRODUCT_ID_LIFETIME',
         'WEBHOOK_URL',
-        'LICENSE_KEY_SECRET',
         'ADMIN_USER_ID'
     ];
     
@@ -615,7 +614,7 @@ async function handlePurchase(interaction, productType) {
     });
     await writeJSONFile(PAYMENTS_FILE, payments);
 
-    const paymentUrl = `https://fungies.io/pay/${product.productId}?user=${interaction.user.id}&payment=${paymentId}`;
+    const paymentUrl = `https://fungies.io/checkout/${product.productId}?custom_data=${JSON.stringify({userId: interaction.user.id, paymentId: paymentId})}`;
 
     const embed = new EmbedBuilder()
         .setTitle('💳 Complete Your Purchase')
