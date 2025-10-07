@@ -120,6 +120,17 @@ function validateUser(user) {
     const now = Date.now();
     const accountAge = now - account.createdTimestamp;
     
+    // Skip validation for admin users
+    const adminUserId = process.env.ADMIN_USER_ID;
+    if (adminUserId && account.id === adminUserId) {
+        return { isValid: true };
+    }
+    
+    // Skip validation if DISABLE_ACCOUNT_AGE_CHECK is set (for testing)
+    if (process.env.DISABLE_ACCOUNT_AGE_CHECK === 'true') {
+        return { isValid: true };
+    }
+    
     if (accountAge < 7 * 24 * 60 * 60 * 1000) {
         return { 
             isValid: false, 
