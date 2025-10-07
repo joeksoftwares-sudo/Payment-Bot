@@ -135,27 +135,351 @@ function calculateExpirationDate(productType) {
     }
 }
 
+// Crypto payment functions
+async function getCryptoPrice(cryptoSymbol) {
+    try {
+        const crypto = CRYPTO_CONFIG[cryptoSymbol];
+        if (!crypto) throw new Error(`Unsupported crypto: ${cryptoSymbol}`);
+        
+        const response = await fetch(crypto.apiUrl);
+        const data = await response.json();
+        
+        // Navigate to the price using the field path
+        const priceFields = crypto.priceField.split('.');
+        let price = data;
+        for (const field of priceFields) {
+            price = price[field];
+        }
+        
+        return parseFloat(price);
+    } catch (error) {
+        console.error(`Error fetching ${cryptoSymbol} price:`, error);
+        throw new Error(`Failed to get ${cryptoSymbol} exchange rate`);
+    }
+}
+
+async function calculateCryptoAmount(usdAmount, cryptoSymbol) {
+    const cryptoPrice = await getCryptoPrice(cryptoSymbol);
+    const amount = usdAmount / cryptoPrice;
+    return parseFloat(amount.toFixed(8)); // 8 decimal places for crypto precision
+}
+
+function generateCryptoPaymentId() {
+    return `crypto_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+}
+
+// Blockchain monitoring functions
+async function checkBTCTransaction(address, expectedAmount, since) {
+    try {
+        const response = await fetch(`https://blockstream.info/api/address/${address}/txs`);
+        const transactions = await response.json();
+        
+        for (const tx of transactions) {
+            // Check if transaction is after payment creation time
+            if (tx.status.block_time && tx.status.block_time * 1000 < since) continue;
+            
+            // Check outputs for exact amount to our address
+            for (const output of tx.vout) {
+                if (output.scriptpubkey_address === address) {
+                    const receivedAmount = output.value / 100000000; // Convert satoshis to BTC
+                    if (Math.abs(receivedAmount - expectedAmount) < 0.00001) { // Allow for tiny rounding differences
+                        return {
+                            found: true,
+                            txid: tx.txid,
+                            amount: receivedAmount,
+                            confirmations: tx.status.confirmed ? 1 : 0
+                        };
+                    }
+                }
+            }
+        }
+        return { found: false };
+    } catch (error) {
+        console.error('Error checking BTC transaction:', error);
+        return { found: false, error: error.message };
+    }
+}
+
+async function checkLTCTransaction(address, expectedAmount, since) {
+    try {
+        const response = await fetch(`https://api.blockchair.com/litecoin/dashboards/address/${address}?limit=10`);
+        const data = await response.json();
+        
+        if (data.data && data.data[address] && data.data[address].transactions) {
+            for (const txHash of data.data[address].transactions) {
+                // Get transaction details
+                const txResponse = await fetch(`https://api.blockchair.com/litecoin/dashboards/transaction/${txHash}`);
+                const txData = await txResponse.json();
+                
+                if (txData.data && txData.data[txHash]) {
+                    const tx = txData.data[txHash].transaction;
+                    
+                    // Check if transaction is after payment creation time
+                    if (new Date(tx.time).getTime() < since) continue;
+                    
+                    // Check outputs for exact amount to our address
+                    const outputs = txData.data[txHash].outputs;
+                    for (const output of outputs) {
+                        if (output.recipient === address) {
+                            const receivedAmount = output.value / 100000000; // Convert to LTC
+                            if (Math.abs(receivedAmount - expectedAmount) < 0.00001) {
+                                return {
+                                    found: true,
+                                    txid: txHash,
+                                    amount: receivedAmount,
+                                    confirmations: tx.block_id ? 1 : 0
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return { found: false };
+    } catch (error) {
+        console.error('Error checking LTC transaction:', error);
+        return { found: false, error: error.message };
+    }
+}
+
+async function monitorCryptoPayment(paymentId) {
+    try {
+        console.log(`🔍 Starting monitoring for crypto payment: ${paymentId}`);
+        
+        const cryptoPayments = await readJSONFile('./data/crypto_payments.json').catch(() => []);
+        const payment = cryptoPayments.find(p => p.paymentId === paymentId);
+        
+        if (!payment) {
+            console.log(`Payment ${paymentId} not found`);
+            return;
+        }
+        
+        const crypto = CRYPTO_CONFIG[payment.cryptoSymbol];
+        if (!crypto) {
+            console.log(`Crypto config not found for ${payment.cryptoSymbol}`);
+            return;
+        }
+        
+        const checkInterval = 30000; // Check every 30 seconds
+        const maxChecks = 60; // Check for 30 minutes (60 * 30 seconds)
+        let checks = 0;
+        
+        const monitor = setInterval(async () => {
+            checks++;
+            
+            try {
+                // Check if payment has expired
+                if (Date.now() > payment.expiresAt) {
+                    console.log(`Payment ${paymentId} has expired`);
+                    clearInterval(monitor);
+                    await updatePaymentStatus(paymentId, 'expired');
+                    return;
+                }
+                
+                // Check blockchain for transaction
+                let result;
+                if (payment.cryptoSymbol === 'btc') {
+                    result = await checkBTCTransaction(crypto.address, payment.cryptoAmount, payment.createdAt);
+                } else if (payment.cryptoSymbol === 'ltc') {
+                    result = await checkLTCTransaction(crypto.address, payment.cryptoAmount, payment.createdAt);
+                }
+                
+                if (result && result.found) {
+                    console.log(`✅ Payment confirmed for ${paymentId}! Transaction: ${result.txid}`);
+                    clearInterval(monitor);
+                    
+                    // Update payment status
+                    await updatePaymentStatus(paymentId, 'completed', result.txid);
+                    
+                    // Generate and deliver license key
+                    await deliverCryptoLicense(payment, result);
+                    return;
+                }
+                
+                // Stop monitoring after maximum checks
+                if (checks >= maxChecks) {
+                    console.log(`Payment ${paymentId} monitoring timeout`);
+                    clearInterval(monitor);
+                    await updatePaymentStatus(paymentId, 'expired');
+                }
+                
+            } catch (error) {
+                console.error(`Error monitoring payment ${paymentId}:`, error);
+            }
+        }, checkInterval);
+        
+    } catch (error) {
+        console.error('Error starting payment monitoring:', error);
+    }
+}
+
+async function updatePaymentStatus(paymentId, status, txid = null) {
+    try {
+        const cryptoPayments = await readJSONFile('./data/crypto_payments.json').catch(() => []);
+        const paymentIndex = cryptoPayments.findIndex(p => p.paymentId === paymentId);
+        
+        if (paymentIndex !== -1) {
+            cryptoPayments[paymentIndex].status = status;
+            if (txid) cryptoPayments[paymentIndex].txid = txid;
+            cryptoPayments[paymentIndex].updatedAt = Date.now();
+            
+            await writeJSONFile('./data/crypto_payments.json', cryptoPayments);
+        }
+    } catch (error) {
+        console.error('Error updating payment status:', error);
+    }
+}
+
+async function deliverCryptoLicense(payment, transactionResult) {
+    try {
+        const user = await client.users.fetch(payment.userId);
+        const licenseKey = generateLicenseKey(payment.userId, payment.productType);
+        
+        // Save license to file
+        const licenses = await readJSONFile('./data/licenses.json').catch(() => []);
+        const newLicense = {
+            key: licenseKey,
+            userId: payment.userId,
+            type: payment.productType,
+            createdAt: Date.now(),
+            expiresAt: Date.now() + (payment.productType === '2weeks' ? 14 : payment.productType === 'monthly' ? 30 : 365 * 10) * 24 * 60 * 60 * 1000,
+            paymentMethod: 'crypto',
+            paymentId: payment.paymentId,
+            txid: transactionResult.txid
+        };
+        
+        licenses.push(newLicense);
+        await writeJSONFile('./data/licenses.json', licenses);
+        
+        // Create redemption link
+        const redemptionLink = `https://your-redemption-site.com/redeem?key=${licenseKey}`;
+        
+        // Send license to user
+        const embed = new EmbedBuilder()
+            .setColor('#00ff00')
+            .setTitle('🎉 Payment Confirmed!')
+            .setDescription(`Your cryptocurrency payment has been confirmed!`)
+            .addFields(
+                { name: '📦 Product', value: PRODUCTS[payment.productType].name, inline: true },
+                { name: '💰 Amount', value: `${payment.cryptoAmount} ${payment.cryptoSymbol.toUpperCase()}`, inline: true },
+                { name: '🔗 Transaction', value: `[View on Blockchain](${payment.cryptoSymbol === 'btc' ? 'https://blockstream.info/tx/' : 'https://blockchair.com/litecoin/transaction/'}${transactionResult.txid})`, inline: true },
+                { name: '🔑 License Key', value: `\`${licenseKey}\``, inline: false },
+                { name: '🌐 Redemption Link', value: `[Click here to redeem](${redemptionLink})`, inline: false }
+            )
+            .setFooter({ text: 'Thank you for your purchase!' })
+            .setTimestamp();
+        
+        await user.send({ embeds: [embed] });
+        
+        console.log(`✅ License delivered to user ${payment.userId} for crypto payment ${payment.paymentId}`);
+        
+    } catch (error) {
+        console.error('Error delivering crypto license:', error);
+    }
+}
+
+// Payment cleanup and notification functions
+async function cleanupExpiredPayments() {
+    try {
+        const cryptoPayments = await readJSONFile('./data/crypto_payments.json').catch(() => []);
+        const now = Date.now();
+        let hasChanges = false;
+        
+        for (let i = 0; i < cryptoPayments.length; i++) {
+            const payment = cryptoPayments[i];
+            
+            // Check if payment is expired and still pending
+            if (payment.status === 'pending' && now > payment.expiresAt) {
+                console.log(`Cleaning up expired payment: ${payment.paymentId}`);
+                
+                // Update payment status
+                cryptoPayments[i].status = 'expired';
+                cryptoPayments[i].updatedAt = now;
+                hasChanges = true;
+                
+                // Notify user about expiration
+                try {
+                    const user = await client.users.fetch(payment.userId);
+                    const product = PRODUCTS[payment.productType];
+                    
+                    const embed = new EmbedBuilder()
+                        .setColor('#ff6b6b')
+                        .setTitle('⏰ Payment Expired')
+                        .setDescription(`Your cryptocurrency payment window has expired.`)
+                        .addFields(
+                            { name: '📦 Product', value: product.name, inline: true },
+                            { name: '💰 Amount', value: `${payment.cryptoAmount} ${payment.cryptoSymbol.toUpperCase()}`, inline: true },
+                            { name: '🔄 Next Steps', value: 'Use `/buy` to start a new payment', inline: false }
+                        )
+                        .setFooter({ text: 'Payment windows are valid for 30 minutes' })
+                        .setTimestamp();
+                    
+                    await user.send({ embeds: [embed] });
+                } catch (notifyError) {
+                    console.error(`Failed to notify user ${payment.userId} about expired payment:`, notifyError);
+                }
+            }
+        }
+        
+        // Save changes if any
+        if (hasChanges) {
+            await writeJSONFile('./data/crypto_payments.json', cryptoPayments);
+        }
+        
+    } catch (error) {
+        console.error('Error cleaning up expired payments:', error);
+    }
+}
+
+// Start periodic cleanup when bot is ready
+function startPaymentCleanup() {
+    // Run cleanup every 5 minutes
+    setInterval(cleanupExpiredPayments, 5 * 60 * 1000);
+    console.log('🧹 Payment cleanup service started');
+}
+
 const PRODUCTS = {
     '2weeks': {
         name: '2 Weeks Access',
         price: '$6.99 + taxes',
         description: 'Full access for 2 weeks',
         productId: config.PRODUCT_ID_2WEEKS,
-        duration: '14 days'
+        duration: '14 days',
+        cryptoPrice: 5.00
     },
     'monthly': {
         name: 'Monthly Access',
         price: '$11 + taxes',
         description: 'Full access for 1 month',
         productId: config.PRODUCT_ID_MONTHLY,
-        duration: '30 days'
+        duration: '30 days',
+        cryptoPrice: 9.00
     },
     'lifetime': {
         name: 'Lifetime Access',
         price: '$22 + taxes',
         description: 'Unlimited access forever',
         productId: config.PRODUCT_ID_LIFETIME,
-        duration: 'Forever'
+        duration: 'Forever',
+        cryptoPrice: 21.00
+    }
+};
+
+// Crypto payment configuration
+const CRYPTO_CONFIG = {
+    BTC: {
+        name: 'Bitcoin',
+        symbol: 'BTC',
+        address: 'bc1q8tdnwuhw2vqcyp5dfpzwjzgf2t3rsdamug9zf9',
+        apiUrl: 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd',
+        priceField: 'bitcoin.usd'
+    },
+    LTC: {
+        name: 'Litecoin',
+        symbol: 'LTC',
+        address: 'LRQ4nSdQaEccRfPNbaKtJ7SU3Ka3P8Eo9D',
+        apiUrl: 'https://api.coingecko.com/api/v3/simple/price?ids=litecoin&vs_currencies=usd',
+        priceField: 'litecoin.usd'
     }
 };
 
@@ -170,6 +494,10 @@ client.once('ready', async () => {
         new SlashCommandBuilder()
             .setName('license')
             .setDescription('Check your current license status'),
+            
+        new SlashCommandBuilder()
+            .setName('payment')
+            .setDescription('Check your pending crypto payment status'),
             
         new SlashCommandBuilder()
             .setName('help')
@@ -194,6 +522,9 @@ client.once('ready', async () => {
         await client.application.commands.set(commands);
         
         console.log('✅ Successfully reloaded application (/) commands.');
+        
+        // Start payment cleanup service
+        startPaymentCleanup();
     } catch (error) {
         console.error('❌ Error registering commands:', error);
     }
@@ -208,6 +539,8 @@ client.on('interactionCreate', async interaction => {
                 await handleBuyCommand(interaction);
             } else if (commandName === 'license') {
                 await handleLicenseCommand(interaction);
+            } else if (commandName === 'payment') {
+                await handlePaymentStatusCommand(interaction);
             } else if (commandName === 'help') {
                 await handleHelpCommand(interaction);
             } else if (commandName === 'myid') {
@@ -264,43 +597,43 @@ async function handleBuyCommand(interaction) {
 
     const embed = new EmbedBuilder()
         .setTitle('🛒 Premium Subscription Options')
-        .setDescription('Choose your subscription plan:')
+        .setDescription('Choose your subscription plan and payment method:')
         .setColor(0x00AE86)
         .addFields(
             {
                 name: '📅 2 Weeks Access',
-                value: `**${PRODUCTS['2weeks'].price}**\n${PRODUCTS['2weeks'].description}`,
+                value: `**Fungies:** ${PRODUCTS['2weeks'].price}\n**Crypto:** $${PRODUCTS['2weeks'].cryptoPrice}\n${PRODUCTS['2weeks'].description}`,
                 inline: true
             },
             {
                 name: '📅 Monthly Access',
-                value: `**${PRODUCTS['monthly'].price}**\n${PRODUCTS['monthly'].description}`,
+                value: `**Fungies:** ${PRODUCTS['monthly'].price}\n**Crypto:** $${PRODUCTS['monthly'].cryptoPrice}\n${PRODUCTS['monthly'].description}`,
                 inline: true
             },
             {
                 name: '♾️ Lifetime Access',
-                value: `**${PRODUCTS['lifetime'].price}**\n${PRODUCTS['lifetime'].description}`,
+                value: `**Fungies:** ${PRODUCTS['lifetime'].price}\n**Crypto:** $${PRODUCTS['lifetime'].cryptoPrice}\n${PRODUCTS['lifetime'].description}`,
                 inline: true
             }
         )
-        .setFooter({ text: 'Click a button below to proceed with payment' })
+        .setFooter({ text: 'Select a plan below to choose your payment method' })
         .setTimestamp();
 
     const row = new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
-                .setCustomId('buy_2weeks')
-                .setLabel('2 Weeks - ' + PRODUCTS['2weeks'].price)
+                .setCustomId('select_2weeks')
+                .setLabel('Select 2 Weeks')
                 .setStyle(ButtonStyle.Primary)
                 .setEmoji('📅'),
             new ButtonBuilder()
-                .setCustomId('buy_monthly')
-                .setLabel('Monthly - ' + PRODUCTS['monthly'].price)
+                .setCustomId('select_monthly')
+                .setLabel('Select Monthly')
                 .setStyle(ButtonStyle.Primary)
                 .setEmoji('📅'),
             new ButtonBuilder()
-                .setCustomId('buy_lifetime')
-                .setLabel('Lifetime - ' + PRODUCTS['lifetime'].price)
+                .setCustomId('select_lifetime')
+                .setLabel('Select Lifetime')
                 .setStyle(ButtonStyle.Success)
                 .setEmoji('♾️')
         );
@@ -341,6 +674,59 @@ async function handleLicenseCommand(interaction) {
     await interaction.reply({ embeds: [embed], ephemeral: true });
 }
 
+async function handlePaymentStatusCommand(interaction) {
+    try {
+        const cryptoPayments = await readJSONFile('./data/crypto_payments.json').catch(() => []);
+        const userPayments = cryptoPayments.filter(p => p.userId === interaction.user.id && p.status === 'pending');
+        
+        if (userPayments.length === 0) {
+            const embed = new EmbedBuilder()
+                .setTitle('💳 Payment Status')
+                .setDescription('You have no pending cryptocurrency payments.')
+                .setColor('#ffa500')
+                .addFields({
+                    name: '💡 Need to make a payment?',
+                    value: 'Use `/buy` to start a new purchase.',
+                    inline: false
+                });
+            
+            await interaction.reply({ embeds: [embed], ephemeral: true });
+            return;
+        }
+        
+        const embed = new EmbedBuilder()
+            .setTitle('💳 Pending Crypto Payments')
+            .setDescription('Here are your pending cryptocurrency payments:')
+            .setColor('#f39c12');
+        
+        userPayments.forEach(payment => {
+            const product = PRODUCTS[payment.productType];
+            const crypto = CRYPTO_CONFIG[payment.cryptoSymbol];
+            const timeLeft = Math.max(0, payment.expiresAt - Date.now());
+            const minutesLeft = Math.floor(timeLeft / (1000 * 60));
+            
+            embed.addFields({
+                name: `${product.name} - ${payment.cryptoSymbol.toUpperCase()}`,
+                value: `**Amount:** ${payment.cryptoAmount} ${payment.cryptoSymbol.toUpperCase()}\n**Address:** \`${crypto.address}\`\n**Time Left:** ${minutesLeft > 0 ? `${minutesLeft} minutes` : 'Expired'}\n**Status:** ${timeLeft > 0 ? '⏳ Awaiting Payment' : '❌ Expired'}`,
+                inline: false
+            });
+        });
+        
+        if (userPayments.some(p => p.expiresAt > Date.now())) {
+            embed.setFooter({ text: 'Send the exact amount to the wallet address to complete your purchase.' });
+        }
+        
+        await interaction.reply({ embeds: [embed], ephemeral: true });
+        
+    } catch (error) {
+        console.error('Error checking payment status:', error);
+        await interaction.reply({ 
+            content: '❌ Unable to check payment status. Please try again later.', 
+            ephemeral: true 
+        });
+    }
+}
+
 async function handleHelpCommand(interaction) {
     const embed = new EmbedBuilder()
         .setTitle('📚 Bot Help')
@@ -355,6 +741,11 @@ async function handleHelpCommand(interaction) {
             {
                 name: '/license',
                 value: 'Check your current license status',
+                inline: false
+            },
+            {
+                name: '/payment',
+                value: 'Check your pending crypto payment status',
                 inline: false
             },
             {
@@ -610,12 +1001,224 @@ async function handleAddKeysModal(interaction) {
 client.on('interactionCreate', async interaction => {
     if (!interaction.isButton()) return;
 
-    const [action, productType] = interaction.customId.split('_');
+    const [action, productType, paymentMethod] = interaction.customId.split('_');
     
-    if (action === 'buy') {
+    if (action === 'select') {
+        await handleProductSelection(interaction, productType);
+    } else if (action === 'buy') {
         await handlePurchase(interaction, productType);
+    } else if (action === 'crypto') {
+        await handleCryptoSelection(interaction, productType);
+    } else if (action === 'pay') {
+        await handleCryptoPayment(interaction, productType, paymentMethod);
     }
 });
+
+async function handleProductSelection(interaction, productType) {
+    const product = PRODUCTS[productType];
+    
+    if (!product) {
+        await interaction.reply({ content: 'Invalid product type.', ephemeral: true });
+        return;
+    }
+
+    const embed = new EmbedBuilder()
+        .setTitle(`💳 Payment Method - ${product.name}`)
+        .setDescription('Choose your preferred payment method:')
+        .setColor(0x00AE86)
+        .addFields(
+            {
+                name: '💳 Fungies Payment',
+                value: `**Price:** ${product.price}\n✅ Instant activation\n✅ Secure payment processing\n✅ Multiple payment options`,
+                inline: true
+            },
+            {
+                name: '₿ Cryptocurrency',
+                value: `**Price:** $${product.cryptoPrice}\n✅ No fees\n✅ BTC & LTC accepted\n✅ Direct wallet payment`,
+                inline: true
+            }
+        )
+        .setFooter({ text: 'Select your preferred payment method below' })
+        .setTimestamp();
+
+    const row = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId(`buy_${productType}`)
+                .setLabel(`Pay with Fungies - ${product.price}`)
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji('💳'),
+            new ButtonBuilder()
+                .setCustomId(`crypto_${productType}`)
+                .setLabel(`Pay with Crypto - $${product.cryptoPrice}`)
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('₿')
+        );
+
+    await interaction.reply({ embeds: [embed], components: [row] });
+}
+
+async function handleCryptoSelection(interaction, productType) {
+    const product = PRODUCTS[productType];
+    
+    if (!product) {
+        await interaction.reply({ content: 'Invalid product type.', ephemeral: true });
+        return;
+    }
+
+    try {
+        // Get real-time crypto prices
+        const btcPrice = await getCryptoPrice('BTC');
+        const ltcPrice = await getCryptoPrice('LTC');
+        
+        const btcAmount = await calculateCryptoAmount(product.cryptoPrice, 'BTC');
+        const ltcAmount = await calculateCryptoAmount(product.cryptoPrice, 'LTC');
+
+        const embed = new EmbedBuilder()
+            .setTitle(`₿ Crypto Payment - ${product.name}`)
+            .setDescription(`Choose your cryptocurrency for **$${product.cryptoPrice}** payment:`)
+            .setColor(0xF7931A)
+            .addFields(
+                {
+                    name: '₿ Bitcoin (BTC)',
+                    value: `**Amount:** ${btcAmount} BTC\n**Rate:** $${btcPrice.toLocaleString()} USD/BTC\n**Network:** Bitcoin`,
+                    inline: true
+                },
+                {
+                    name: '🔸 Litecoin (LTC)',
+                    value: `**Amount:** ${ltcAmount} LTC\n**Rate:** $${ltcPrice.toLocaleString()} USD/LTC\n**Network:** Litecoin`,
+                    inline: true
+                }
+            )
+            .setFooter({ text: 'Rates are updated in real-time • Payment must be exact amount' })
+            .setTimestamp();
+
+        const row = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`pay_${productType}_BTC`)
+                    .setLabel(`Pay ${btcAmount} BTC`)
+                    .setStyle(ButtonStyle.Primary)
+                    .setEmoji('₿'),
+                new ButtonBuilder()
+                    .setCustomId(`pay_${productType}_LTC`)
+                    .setLabel(`Pay ${ltcAmount} LTC`)
+                    .setStyle(ButtonStyle.Secondary)
+                    .setEmoji('🔸')
+            );
+
+        await interaction.reply({ embeds: [embed], components: [row] });
+        
+    } catch (error) {
+        console.error('Error fetching crypto prices:', error);
+        await interaction.reply({
+            content: '❌ Unable to fetch current crypto rates. Please try again in a moment.',
+            ephemeral: true
+        });
+    }
+}
+
+async function handleCryptoPayment(interaction, productType, cryptoSymbol) {
+    const product = PRODUCTS[productType];
+    const crypto = CRYPTO_CONFIG[cryptoSymbol];
+    const userId = interaction.user.id;
+    
+    if (!product || !crypto) {
+        await interaction.reply({ content: 'Invalid payment configuration.', ephemeral: true });
+        return;
+    }
+
+    if (!checkPurchaseCooldown(userId, 300000)) {
+        await interaction.reply({
+            content: '⏰ Please wait 5 minutes between purchase attempts to prevent fraud.',
+            ephemeral: true
+        });
+        return;
+    }
+
+    const duplicateCheck = await checkDuplicatePurchase(userId, productType);
+    if (duplicateCheck.isDuplicate) {
+        await interaction.reply({
+            content: `❌ ${duplicateCheck.reason}. Please check your existing licenses with \`/license\`.`,
+            ephemeral: true
+        });
+        return;
+    }
+
+    try {
+        const cryptoAmount = await calculateCryptoAmount(product.cryptoPrice, cryptoSymbol);
+        const paymentId = generateCryptoPaymentId();
+        
+        // Store pending crypto payment
+        const cryptoPayments = await readJSONFile('./data/crypto_payments.json').catch(() => []);
+        const cryptoPayment = {
+            paymentId,
+            userId,
+            productType,
+            cryptoSymbol,
+            cryptoAmount,
+            usdAmount: product.cryptoPrice,
+            address: crypto.address,
+            status: 'pending',
+            createdAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString() // 30 minutes
+        };
+        
+        cryptoPayments.push(cryptoPayment);
+        await writeJSONFile('./data/crypto_payments.json', cryptoPayments);
+
+        const embed = new EmbedBuilder()
+            .setTitle(`₿ ${crypto.name} Payment Instructions`)
+            .setDescription(`Send **exactly** \`${cryptoAmount}\` ${cryptoSymbol} to complete your purchase.`)
+            .setColor(0xF7931A)
+            .addFields(
+                {
+                    name: '📦 Product',
+                    value: product.name,
+                    inline: true
+                },
+                {
+                    name: '💰 Amount',
+                    value: `${cryptoAmount} ${cryptoSymbol}`,
+                    inline: true
+                },
+                {
+                    name: '🏦 Wallet Address',
+                    value: `\`${crypto.address}\``,
+                    inline: false
+                },
+                {
+                    name: '🔍 Payment ID',
+                    value: `\`${paymentId}\``,
+                    inline: true
+                },
+                {
+                    name: '⏰ Expires',
+                    value: '<t:' + Math.floor((Date.now() + 30 * 60 * 1000) / 1000) + ':R>',
+                    inline: true
+                },
+                {
+                    name: '⚠️ Important Instructions',
+                    value: '• Send **EXACTLY** the specified amount\n• Use the correct network\n• Payment is auto-detected\n• License key will be sent when confirmed',
+                    inline: false
+                }
+            )
+            .setFooter({ text: 'We will automatically detect your payment and send your license key' })
+            .setTimestamp();
+
+        await interaction.reply({ embeds: [embed] });
+        
+        // Start monitoring for this payment
+        monitorCryptoPayment(paymentId);
+        
+    } catch (error) {
+        console.error('Error creating crypto payment:', error);
+        await interaction.reply({
+            content: '❌ Unable to create crypto payment. Please try again.',
+            ephemeral: true
+        });
+    }
+}
 
 async function handlePurchase(interaction, productType) {
     const product = PRODUCTS[productType];
