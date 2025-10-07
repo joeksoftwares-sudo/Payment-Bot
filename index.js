@@ -432,17 +432,17 @@ async function handleAddCommand(interaction) {
 
             const productTypeInput = new TextInputBuilder()
                 .setCustomId('productType')
-                .setLabel('Product Type (2weeks/monthly/lifetime)')
+                .setLabel('Product Type')
                 .setStyle(TextInputStyle.Short)
-                .setPlaceholder('lifetime')
+                .setPlaceholder('2weeks, monthly, or lifetime')
                 .setRequired(true)
                 .setMaxLength(20);
 
             const userIdInput = new TextInputBuilder()
                 .setCustomId('userId')
-                .setLabel('User ID (optional - leave blank for unassigned)')
+                .setLabel('User ID (optional)')
                 .setStyle(TextInputStyle.Short)
-                .setPlaceholder('123456789012345678')
+                .setPlaceholder('Leave blank for unassigned keys')
                 .setRequired(false)
                 .setMaxLength(20);
 
