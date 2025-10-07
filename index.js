@@ -121,6 +121,49 @@ function generateLicenseKey(userId, productType) {
     return `${productType.toUpperCase()}-${hash.toUpperCase()}`;
 }
 
+async function notifyAdminOfPurchase(userId, licenseKey, productType, paymentMethod, additionalInfo = {}) {
+    try {
+        if (!config.ADMIN_USER_ID) {
+            console.log('⚠️ ADMIN_USER_ID not configured, skipping admin notification');
+            return;
+        }
+
+        const user = await client.users.fetch(userId);
+        const admin = await client.users.fetch(config.ADMIN_USER_ID);
+        const product = PRODUCTS[productType];
+        
+        const embed = new EmbedBuilder()
+            .setTitle('🔔 New Purchase Alert')
+            .setDescription('A customer has successfully purchased a license!')
+            .setColor(0x00ff00)
+            .addFields(
+                { name: '👤 Customer', value: `${user.tag} (${user.id})`, inline: true },
+                { name: '📦 Product', value: product.name, inline: true },
+                { name: '💳 Payment Method', value: paymentMethod, inline: true },
+                { name: '🔑 License Key', value: `\`${licenseKey}\``, inline: false }
+            )
+            .setFooter({ text: 'Admin Notification System' })
+            .setTimestamp();
+
+        // Add additional payment-specific info
+        if (additionalInfo.amount) {
+            embed.addFields({ name: '💰 Amount', value: additionalInfo.amount, inline: true });
+        }
+        if (additionalInfo.txid) {
+            embed.addFields({ name: '🔗 Transaction', value: `[View Transaction](${additionalInfo.explorerUrl})`, inline: true });
+        }
+        if (additionalInfo.paymentId) {
+            embed.addFields({ name: '🆔 Payment ID', value: additionalInfo.paymentId, inline: true });
+        }
+
+        await admin.send({ embeds: [embed] });
+        console.log(`✅ Admin notification sent for purchase by ${user.tag}`);
+        
+    } catch (error) {
+        console.error('❌ Error sending admin notification:', error);
+    }
+}
+
 function calculateExpirationDate(productType) {
     const now = new Date();
     switch (productType) {
@@ -370,6 +413,20 @@ async function deliverCryptoLicense(payment, transactionResult) {
             .setTimestamp();
         
         await user.send({ embeds: [embed] });
+        
+        // Notify admin of the purchase
+        await notifyAdminOfPurchase(
+            payment.userId, 
+            licenseKey, 
+            payment.productType, 
+            `Cryptocurrency (${payment.cryptoSymbol.toUpperCase()})`,
+            {
+                amount: `${payment.cryptoAmount} ${payment.cryptoSymbol.toUpperCase()}`,
+                txid: transactionResult.txid,
+                explorerUrl: `${payment.cryptoSymbol === 'btc' ? 'https://blockstream.info/tx/' : 'https://blockchair.com/litecoin/transaction/'}${transactionResult.txid}`,
+                paymentId: payment.paymentId
+            }
+        );
         
         console.log(`✅ License delivered to user ${payment.userId} for crypto payment ${payment.paymentId}`);
         
@@ -1503,6 +1560,17 @@ async function handlePaymentCompleted(paymentData) {
         
         console.log('📨 Sending license key to user via DM...');
         await sendLicenseKeyToUser(userId, licenseKey, productType);
+
+        // Notify admin of the purchase
+        await notifyAdminOfPurchase(
+            userId, 
+            licenseKey, 
+            productType, 
+            'Fungies.io',
+            {
+                paymentId: payment_id
+            }
+        );
 
         console.log(`✅ License generated for user ${userId}: ${licenseKey}`);
     } catch (error) {
