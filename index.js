@@ -772,8 +772,9 @@ async function handlePaymentCompleted(paymentData) {
         const payment_id = payment?.id;
         const amount = payment?.value;
         
-        // Extract product ID from items array (assuming first item)
-        const product_id = items?.[0]?.id || items?.[0]?.productId;
+        // Extract product ID from items array - use offer.id instead of item.id
+        // In Fungies.io: item.id = unique instance, offer.id = our configured product
+        const product_id = items?.[0]?.offer?.id || items?.[0]?.productId;
         
         // Try to extract custom_data from payment URL or other sources
         // For now, we'll rely on customer_id since custom_data might not be available
