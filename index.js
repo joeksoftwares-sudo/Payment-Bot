@@ -620,7 +620,7 @@ async function handlePurchase(interaction, productType) {
         paymentId: paymentId
     }));
     
-    const paymentUrl = `https://fungies.io/checkout/${product.productId}?custom_data=${customData}`;
+    const paymentUrl = `https://roxgames.app.fungies.io/checkout/${product.productId}?custom_data=${customData}`;
     
     console.log(`💳 Generated payment URL for ${interaction.user.tag}: ${paymentUrl}`);
 
