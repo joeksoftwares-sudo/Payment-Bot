@@ -614,7 +614,15 @@ async function handlePurchase(interaction, productType) {
     });
     await writeJSONFile(PAYMENTS_FILE, payments);
 
-    const paymentUrl = `https://fungies.io/checkout/${product.productId}?custom_data=${JSON.stringify({userId: interaction.user.id, paymentId: paymentId})}`;
+    // Prepare custom data for Fungies.io
+    const customData = encodeURIComponent(JSON.stringify({
+        userId: interaction.user.id, 
+        paymentId: paymentId
+    }));
+    
+    const paymentUrl = `https://fungies.io/checkout/${product.productId}?custom_data=${customData}`;
+    
+    console.log(`💳 Generated payment URL for ${interaction.user.tag}: ${paymentUrl}`);
 
     const embed = new EmbedBuilder()
         .setTitle('💳 Complete Your Purchase')
