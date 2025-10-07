@@ -784,18 +784,30 @@ async function handlePaymentCompleted(paymentData) {
 
         if (!productType) {
             console.error('❌ Unknown product ID:', product_id);
+            console.error('Available products:', Object.entries(PRODUCTS).map(([type, prod]) => `${type}: ${prod.productId}`));
             return;
         }
-
+        
+        console.log(`✅ Found product type: ${productType}`);
+        
         const userId = custom_data?.userId || customer_id;
+        console.log('🔍 Determining user ID:');
+        console.log('  - custom_data?.userId:', custom_data?.userId);
+        console.log('  - customer_id:', customer_id);
+        console.log('  - Final userId:', userId);
+        
         if (!userId) {
             console.error('❌ No user ID found in payment data');
             return;
         }
 
+        console.log('🔑 Generating license key...');
         const licenseKey = generateLicenseKey(userId, productType);
         const expirationDate = calculateExpirationDate(productType);
+        console.log('✅ License key generated:', licenseKey);
+        console.log('📅 Expiration date:', expirationDate.toISOString());
 
+        console.log('💾 Saving license to database...');
         const licenses = await readJSONFile(LICENSES_FILE);
         const newLicense = {
             licenseKey,
@@ -809,7 +821,9 @@ async function handlePaymentCompleted(paymentData) {
         };
         licenses.push(newLicense);
         await writeJSONFile(LICENSES_FILE, licenses);
+        console.log('✅ License saved to database');
 
+        console.log('🔄 Updating payment status...');
         const payments = await readJSONFile(PAYMENTS_FILE);
         const paymentIndex = payments.findIndex(p => p.paymentId === payment_id);
         if (paymentIndex !== -1) {
@@ -817,8 +831,12 @@ async function handlePaymentCompleted(paymentData) {
             payments[paymentIndex].completedAt = new Date().toISOString();
             payments[paymentIndex].licenseKey = licenseKey;
             await writeJSONFile(PAYMENTS_FILE, payments);
+            console.log('✅ Payment status updated');
+        } else {
+            console.log('⚠️ Payment record not found in database');
         }
-
+        
+        console.log('📨 Sending license key to user via DM...');
         await sendLicenseKeyToUser(userId, licenseKey, productType);
 
         console.log(`✅ License generated for user ${userId}: ${licenseKey}`);
@@ -901,8 +919,15 @@ async function handlePaymentRefunded(paymentData) {
 
 async function sendLicenseKeyToUser(userId, licenseKey, productType) {
     try {
+        console.log(`📨 Attempting to send license key to user ${userId}`);
+        console.log(`🔑 License key: ${licenseKey}`);
+        console.log(`📦 Product type: ${productType}`);
+        
         const user = await client.users.fetch(userId);
+        console.log(`✅ User found: ${user.tag} (${user.id})`);
+        
         const product = PRODUCTS[productType];
+        console.log(`📦 Product details:`, product);
         
         const embed = new EmbedBuilder()
             .setTitle('🎉 Purchase Successful!')
@@ -933,10 +958,12 @@ async function sendLicenseKeyToUser(userId, licenseKey, productType) {
             .setFooter({ text: 'Thank you for your business!' })
             .setTimestamp();
 
+        console.log('📤 Sending DM to user...');
         await user.send({ embeds: [embed] });
-        console.log(`✅ License key sent to user ${userId}`);
+        console.log(`✅ License key sent successfully to user ${userId} (${user.tag})`);
     } catch (error) {
         console.error('❌ Could not send license key to user:', error);
+        console.error('Error details:', error.message);
     }
 }
 
