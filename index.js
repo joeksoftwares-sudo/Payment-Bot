@@ -175,6 +175,10 @@ client.once('ready', async () => {
             .setDescription('Get help with bot commands'),
             
         new SlashCommandBuilder()
+            .setName('myid')
+            .setDescription('Get your Discord user ID (for admin setup)'),
+            
+        new SlashCommandBuilder()
             .setName('add')
             .setDescription('Add license keys manually (Admin only)')
             .addSubcommand(subcommand =>
@@ -205,6 +209,8 @@ client.on('interactionCreate', async interaction => {
                 await handleLicenseCommand(interaction);
             } else if (commandName === 'help') {
                 await handleHelpCommand(interaction);
+            } else if (commandName === 'myid') {
+                await handleMyIdCommand(interaction);
             } else if (commandName === 'add') {
                 await handleAddCommand(interaction);
             }
@@ -356,12 +362,40 @@ async function handleHelpCommand(interaction) {
                 inline: false
             },
             {
+                name: '/myid',
+                value: 'Get your Discord user ID (for admin setup)',
+                inline: false
+            },
+            {
                 name: '/add keys',
                 value: 'Add license keys manually (Admin only)',
                 inline: false
             }
         )
         .setFooter({ text: 'For support, contact the server administrators' })
+        .setTimestamp();
+
+    await interaction.reply({ embeds: [embed], ephemeral: true });
+}
+
+async function handleMyIdCommand(interaction) {
+    const embed = new EmbedBuilder()
+        .setTitle('🆔 Your Discord User ID')
+        .setDescription(`Your Discord User ID is: \`${interaction.user.id}\``)
+        .setColor(0x00AE86)
+        .addFields(
+            {
+                name: '📋 How to use this ID',
+                value: 'Copy this ID and set it as `ADMIN_USER_ID` in your Railway environment variables to gain admin access.',
+                inline: false
+            },
+            {
+                name: '⚙️ Railway Setup',
+                value: '1. Go to Railway Dashboard\n2. Select your project\n3. Go to Variables tab\n4. Set `ADMIN_USER_ID` = `' + interaction.user.id + '`',
+                inline: false
+            }
+        )
+        .setFooter({ text: 'This message is only visible to you' })
         .setTimestamp();
 
     await interaction.reply({ embeds: [embed], ephemeral: true });
