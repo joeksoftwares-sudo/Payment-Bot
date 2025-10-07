@@ -483,7 +483,7 @@ const CRYPTO_CONFIG = {
     }
 };
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
     console.log(`✅ Bot is ready! Logged in as ${client.user.tag}`);
     
     const commands = [
@@ -1033,7 +1033,7 @@ async function handleProductSelection(interaction, productType) {
                 inline: true
             },
             {
-                name: '₿ Cryptocurrency',
+                name: '🪙 Cryptocurrency',
                 value: `**Price:** $${product.cryptoPrice}\n✅ No fees\n✅ BTC & LTC accepted\n✅ Direct wallet payment`,
                 inline: true
             }
@@ -1052,7 +1052,7 @@ async function handleProductSelection(interaction, productType) {
                 .setCustomId(`crypto_${productType}`)
                 .setLabel(`Pay with Crypto - $${product.cryptoPrice}`)
                 .setStyle(ButtonStyle.Secondary)
-                .setEmoji('₿')
+                .setEmoji('🪙')
         );
 
     await interaction.reply({ embeds: [embed], components: [row] });
@@ -1075,12 +1075,12 @@ async function handleCryptoSelection(interaction, productType) {
         const ltcAmount = await calculateCryptoAmount(product.cryptoPrice, 'LTC');
 
         const embed = new EmbedBuilder()
-            .setTitle(`₿ Crypto Payment - ${product.name}`)
+            .setTitle(`🪙 Crypto Payment - ${product.name}`)
             .setDescription(`Choose your cryptocurrency for **$${product.cryptoPrice}** payment:`)
             .setColor(0xF7931A)
             .addFields(
                 {
-                    name: '₿ Bitcoin (BTC)',
+                    name: '🟠 Bitcoin (BTC)',
                     value: `**Amount:** ${btcAmount} BTC\n**Rate:** $${btcPrice.toLocaleString()} USD/BTC\n**Network:** Bitcoin`,
                     inline: true
                 },
@@ -1099,7 +1099,7 @@ async function handleCryptoSelection(interaction, productType) {
                     .setCustomId(`pay_${productType}_BTC`)
                     .setLabel(`Pay ${btcAmount} BTC`)
                     .setStyle(ButtonStyle.Primary)
-                    .setEmoji('₿'),
+                    .setEmoji('🟠'),
                 new ButtonBuilder()
                     .setCustomId(`pay_${productType}_LTC`)
                     .setLabel(`Pay ${ltcAmount} LTC`)
@@ -1168,7 +1168,7 @@ async function handleCryptoPayment(interaction, productType, cryptoSymbol) {
         await writeJSONFile('./data/crypto_payments.json', cryptoPayments);
 
         const embed = new EmbedBuilder()
-            .setTitle(`₿ ${crypto.name} Payment Instructions`)
+            .setTitle(`🪙 ${crypto.name} Payment Instructions`)
             .setDescription(`Send **exactly** \`${cryptoAmount}\` ${cryptoSymbol} to complete your purchase.`)
             .setColor(0xF7931A)
             .addFields(
