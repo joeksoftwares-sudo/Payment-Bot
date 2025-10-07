@@ -41,6 +41,7 @@ function validateEnvironmentVariables() {
         'PRODUCT_ID_MONTHLY',
         'PRODUCT_ID_LIFETIME',
         'WEBHOOK_URL',
+        'LICENSE_KEY_SECRET',
         'ADMIN_USER_ID'
     ];
     
