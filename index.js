@@ -402,6 +402,9 @@ async function handleMyIdCommand(interaction) {
 }
 
 async function handleAddCommand(interaction) {
+    console.log(`🔧 Admin command attempted by ${interaction.user.tag} (${interaction.user.id})`);
+    console.log(`🔧 Current ADMIN_USER_ID: ${config.ADMIN_USER_ID}`);
+    
     if (interaction.user.id !== config.ADMIN_USER_ID) {
         await interaction.reply({
             content: '❌ You do not have permission to use this command.',
@@ -411,43 +414,53 @@ async function handleAddCommand(interaction) {
     }
 
     const subcommand = interaction.options.getSubcommand();
+    console.log(`🔧 Subcommand: ${subcommand}`);
     
     if (subcommand === 'keys') {
-        const modal = new ModalBuilder()
-            .setCustomId('addKeysModal')
-            .setTitle('Add License Keys');
+        try {
+            const modal = new ModalBuilder()
+                .setCustomId('addKeysModal')
+                .setTitle('Add License Keys');
 
-        const keysInput = new TextInputBuilder()
-            .setCustomId('licenseKeys')
-            .setLabel('License Keys (one per line)')
-            .setStyle(TextInputStyle.Paragraph)
-            .setPlaceholder('LIFETIME-ABCD1234\nMONTHLY-EFGH5678\n2WEEKS-IJKL9012')
-            .setRequired(true)
-            .setMaxLength(4000);
+            const keysInput = new TextInputBuilder()
+                .setCustomId('licenseKeys')
+                .setLabel('License Keys (one per line)')
+                .setStyle(TextInputStyle.Paragraph)
+                .setPlaceholder('LIFETIME-ABCD1234\nMONTHLY-EFGH5678\n2WEEKS-IJKL9012')
+                .setRequired(true)
+                .setMaxLength(4000);
 
-        const productTypeInput = new TextInputBuilder()
-            .setCustomId('productType')
-            .setLabel('Product Type (2weeks/monthly/lifetime)')
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder('lifetime')
-            .setRequired(true)
-            .setMaxLength(20);
+            const productTypeInput = new TextInputBuilder()
+                .setCustomId('productType')
+                .setLabel('Product Type (2weeks/monthly/lifetime)')
+                .setStyle(TextInputStyle.Short)
+                .setPlaceholder('lifetime')
+                .setRequired(true)
+                .setMaxLength(20);
 
-        const userIdInput = new TextInputBuilder()
-            .setCustomId('userId')
-            .setLabel('User ID (optional - leave blank for unassigned)')
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder('123456789012345678')
-            .setRequired(false)
-            .setMaxLength(20);
+            const userIdInput = new TextInputBuilder()
+                .setCustomId('userId')
+                .setLabel('User ID (optional - leave blank for unassigned)')
+                .setStyle(TextInputStyle.Short)
+                .setPlaceholder('123456789012345678')
+                .setRequired(false)
+                .setMaxLength(20);
 
-        const firstActionRow = new ActionRowBuilder().addComponents(keysInput);
-        const secondActionRow = new ActionRowBuilder().addComponents(productTypeInput);
-        const thirdActionRow = new ActionRowBuilder().addComponents(userIdInput);
+            const firstActionRow = new ActionRowBuilder().addComponents(keysInput);
+            const secondActionRow = new ActionRowBuilder().addComponents(productTypeInput);
+            const thirdActionRow = new ActionRowBuilder().addComponents(userIdInput);
 
-        modal.addComponents(firstActionRow, secondActionRow, thirdActionRow);
+            modal.addComponents(firstActionRow, secondActionRow, thirdActionRow);
 
-        await interaction.showModal(modal);
+            await interaction.showModal(modal);
+            console.log(`🔧 Modal shown successfully to ${interaction.user.tag}`);
+        } catch (modalError) {
+            console.error('🔧 Error creating/showing modal:', modalError);
+            await interaction.reply({
+                content: `❌ Error creating modal: ${modalError.message}`,
+                ephemeral: true
+            });
+        }
     }
 }
 
