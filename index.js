@@ -750,7 +750,16 @@ function verifyWebhookSignature(payload, signature) {
         .update(JSON.stringify(payload))
         .digest('hex');
     
-    return signature === expectedSignature;
+    // Fungies.io sends signature in format "sha256_<hash>"
+    const receivedSignature = signature?.startsWith('sha256_') ? signature.slice(7) : signature;
+    
+    console.log('🔍 Signature verification:');
+    console.log('  - Received:', signature);
+    console.log('  - Extracted:', receivedSignature);
+    console.log('  - Expected:', expectedSignature);
+    console.log('  - Match:', receivedSignature === expectedSignature);
+    
+    return receivedSignature === expectedSignature;
 }
 
 async function handlePaymentCompleted(paymentData) {
