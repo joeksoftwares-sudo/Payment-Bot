@@ -1012,6 +1012,11 @@ async function sendLicenseKeyToUser(userId, licenseKey, productType) {
                     inline: true
                 },
                 {
+                    name: '🎯 Redeem Your Key',
+                    value: `Please redeem your key at: https://discord.com/channels/1381923242528477224/1381964183658037329/1393526095478919280`,
+                    inline: false
+                },
+                {
                     name: '⚠️ Important',
                     value: 'Keep this license key safe! You can check your license status anytime using `/license`',
                     inline: false
