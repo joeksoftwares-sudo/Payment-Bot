@@ -776,9 +776,22 @@ async function handlePaymentCompleted(paymentData) {
         // In Fungies.io: item.id = unique instance, offer.id = our configured product
         const product_id = items?.[0]?.offer?.id || items?.[0]?.productId;
         
-        // Try to extract custom_data from payment URL or other sources
-        // For now, we'll rely on customer_id since custom_data might not be available
-        const custom_data = null; // We'll need to get Discord user ID differently
+        // Try to extract custom_data from various possible locations in Fungies.io webhook
+        let custom_data = null;
+        
+        // Check different possible locations for custom data
+        if (items?.[0]?.customFields) {
+            custom_data = items[0].customFields;
+            console.log('📦 Found customFields in items[0]:', custom_data);
+        } else if (payment?.customFields) {
+            custom_data = payment.customFields;
+            console.log('📦 Found customFields in payment:', custom_data);
+        } else if (paymentData?.customFields) {
+            custom_data = paymentData.customFields;
+            console.log('📦 Found customFields in paymentData:', custom_data);
+        } else {
+            console.log('📦 No custom_data found in webhook');
+        }
         
         console.log('📦 Extracted data:');
         console.log('  - customer_id:', customer_id);
