@@ -1,4 +1,28 @@
 const cron = require('node-cron');
+const fs = require('fs').promises;
+const path = require('path');
+
+const DATA_DIR = './data';
+const LICENSES_FILE = path.join(DATA_DIR, 'licenses.json');
+const PAYMENTS_FILE = path.join(DATA_DIR, 'payments.json');
+
+async function readJSONFile(filePath) {
+    try {
+        const data = await fs.readFile(filePath, 'utf8');
+        return JSON.parse(data);
+    } catch (error) {
+        console.error(`Error reading ${filePath}:`, error);
+        return [];
+    }
+}
+
+async function writeJSONFile(filePath, data) {
+    try {
+        await fs.writeFile(filePath, JSON.stringify(data, null, 2));
+    } catch (error) {
+        console.error(`Error writing ${filePath}:`, error);
+    }
+}
 
 const rateLimit = new Map();
 const userCooldowns = new Map();

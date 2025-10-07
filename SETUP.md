@@ -102,7 +102,7 @@ FUNGIES_WEBHOOK_SECRET = your_actual_webhook_secret
 PRODUCT_ID_2WEEKS = your_actual_2weeks_product_id
 PRODUCT_ID_MONTHLY = your_actual_monthly_product_id
 PRODUCT_ID_LIFETIME = your_actual_lifetime_product_id
-WEBHOOK_URL = https://your-railway-app-url.railway.app/webhook
+WEBHOOK_URL = payment-bot-production.up.railway.app/webhook
 LICENSE_KEY_SECRET = your_random_secret_for_license_generation
 PORT = 3000
 ```

@@ -137,21 +137,21 @@ function calculateExpirationDate(productType) {
 const PRODUCTS = {
     '2weeks': {
         name: '2 Weeks Access',
-        price: '$9.99',
+        price: '$6.99 + taxes',
         description: 'Full access for 2 weeks',
         productId: config.PRODUCT_ID_2WEEKS,
         duration: '14 days'
     },
     'monthly': {
         name: 'Monthly Access',
-        price: '$19.99',
+        price: '$11 + taxes',
         description: 'Full access for 1 month',
         productId: config.PRODUCT_ID_MONTHLY,
         duration: '30 days'
     },
     'lifetime': {
         name: 'Lifetime Access',
-        price: '$99.99',
+        price: '$22 + taxes',
         description: 'Unlimited access forever',
         productId: config.PRODUCT_ID_LIFETIME,
         duration: 'Forever'
