@@ -716,7 +716,7 @@ app.post('/webhook', async (req, res) => {
         console.log('📦 Headers:', req.headers);
         console.log('📦 Body:', req.body);
         
-        const signature = req.headers['x-fungies-signature'];
+        const signature = req.headers['x-fngs-signature'];
         console.log('📦 Signature:', signature);
         
         if (!verifyWebhookSignature(req.body, signature)) {
@@ -726,21 +726,15 @@ app.post('/webhook', async (req, res) => {
         
         console.log('✅ Webhook signature verified');
 
-        const { event, data } = req.body;
-        console.log('📦 Event type:', event);
+        const { type, data } = req.body;
+        console.log('📦 Event type:', type);
         console.log('📦 Event data:', data);
 
-        if (event === 'payment.completed') {
-            console.log('💰 Processing payment.completed event');
+        if (type === 'payment_success') {
+            console.log('💰 Processing payment_success event');
             await handlePaymentCompleted(data);
-        } else if (event === 'payment.failed') {
-            console.log('❌ Processing payment.failed event');
-            await handlePaymentFailed(data);
-        } else if (event === 'payment.refunded') {
-            console.log('💸 Processing payment.refunded event');
-            await handlePaymentRefunded(data);
         } else {
-            console.log('❓ Unknown event type:', event);
+            console.log('❓ Unknown event type:', type);
         }
 
         res.status(200).send('OK');
@@ -763,13 +757,31 @@ async function handlePaymentCompleted(paymentData) {
     try {
         console.log('✅ Payment completed - Full data:', JSON.stringify(paymentData, null, 2));
         
-        const { customer_id, product_id, amount, payment_id, custom_data } = paymentData;
+        // Extract data from Fungies.io structure
+        const { payment, customer, items } = paymentData;
+        const customer_id = customer?.id;
+        const payment_id = payment?.id;
+        const amount = payment?.value;
+        
+        // Extract product ID from items array (assuming first item)
+        const product_id = items?.[0]?.id || items?.[0]?.productId;
+        
+        // Try to extract custom_data from payment URL or other sources
+        // For now, we'll rely on customer_id since custom_data might not be available
+        const custom_data = null; // We'll need to get Discord user ID differently
+        
         console.log('📦 Extracted data:');
         console.log('  - customer_id:', customer_id);
         console.log('  - product_id:', product_id);
         console.log('  - amount:', amount);
         console.log('  - payment_id:', payment_id);
         console.log('  - custom_data:', custom_data);
+        console.log('  - items:', items);
+        
+        // For debugging: let's see what's in the items array
+        if (items && items.length > 0) {
+            console.log('📦 First item details:', JSON.stringify(items[0], null, 2));
+        }
         
         let productType = null;
         console.log('🔍 Looking for product type for product_id:', product_id);
@@ -790,14 +802,40 @@ async function handlePaymentCompleted(paymentData) {
         
         console.log(`✅ Found product type: ${productType}`);
         
-        const userId = custom_data?.userId || customer_id;
-        console.log('🔍 Determining user ID:');
-        console.log('  - custom_data?.userId:', custom_data?.userId);
-        console.log('  - customer_id:', customer_id);
-        console.log('  - Final userId:', userId);
+        // Try to find the Discord user ID from our pending payments
+        console.log('🔍 Looking for Discord user ID in pending payments...');
+        const pendingPayments = await readJSONFile(PAYMENTS_FILE);
+        
+        let userId = null;
+        
+        // First try to get from custom_data if available
+        if (custom_data?.userId) {
+            userId = custom_data.userId;
+            console.log('✅ Found user ID from custom_data:', userId);
+        } else {
+            // Try to find matching payment by product type and timing
+            const recentPayments = pendingPayments.filter(p => 
+                p.status === 'pending' && 
+                p.productType === productType &&
+                Date.now() - new Date(p.createdAt).getTime() < 300000 // Within 5 minutes
+            );
+            
+            console.log(`🔍 Found ${recentPayments.length} recent pending payments for ${productType}`);
+            
+            if (recentPayments.length > 0) {
+                // Take the most recent one
+                const mostRecent = recentPayments.sort((a, b) => 
+                    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+                )[0];
+                
+                userId = mostRecent.userId;
+                console.log('✅ Found user ID from recent payment:', userId);
+            }
+        }
         
         if (!userId) {
-            console.error('❌ No user ID found in payment data');
+            console.error('❌ Could not determine Discord user ID from webhook or pending payments');
+            console.error('❌ This payment cannot be processed automatically');
             return;
         }
 
