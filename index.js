@@ -573,11 +573,28 @@ client.once('clientReady', async () => {
             
         new SlashCommandBuilder()
             .setName('add')
-            .setDescription('Add license keys manually (Admin only)')
+            .setDescription('Manage license keys (Admin only)')
             .addSubcommand(subcommand =>
                 subcommand
                     .setName('keys')
                     .setDescription('Add multiple license keys'))
+            .addSubcommand(subcommand =>
+                subcommand
+                    .setName('view')
+                    .setDescription('View all license keys')
+                    .addStringOption(option =>
+                        option.setName('filter')
+                            .setDescription('Filter by status or product type')
+                            .setRequired(false)
+                            .addChoices(
+                                { name: 'Active Only', value: 'active' },
+                                { name: 'Expired Only', value: 'expired' },
+                                { name: '2 Weeks', value: '2weeks' },
+                                { name: 'Monthly', value: 'monthly' },
+                                { name: 'Lifetime', value: 'lifetime' },
+                                { name: 'Manual Added', value: 'manual' },
+                                { name: 'Recent (Last 10)', value: 'recent' }
+                            )))
     ];
 
     // Add test commands in test mode
@@ -609,16 +626,25 @@ client.once('clientReady', async () => {
                         .addStringOption(option =>
                             option.setName('paymentid')
                                 .setDescription('Payment ID to simulate')
-                                .setRequired(true)))
+                                .setRequired(true))),
+            new SlashCommandBuilder()
+                .setName('refreshcommands')
+                .setDescription('Force refresh slash commands (Admin only)')
         );
     }
 
     try {
         console.log('🔄 Started refreshing application (/) commands.');
+        console.log(`📝 Registering ${commands.length} commands:`, commands.map(cmd => cmd.name).join(', '));
+        
+        if (config.TEST_MODE) {
+            console.log('🧪 TEST MODE: Test commands included in registration');
+        }
         
         await client.application.commands.set(commands);
         
         console.log('✅ Successfully reloaded application (/) commands.');
+        console.log('ℹ️  Note: Discord may take up to 1 hour to update slash commands globally');
         
         // Start payment cleanup service
         startPaymentCleanup();
@@ -646,6 +672,8 @@ client.on('interactionCreate', async interaction => {
                 await handleAddCommand(interaction);
             } else if (commandName === 'test' && config.TEST_MODE) {
                 await handleTestCommand(interaction);
+            } else if (commandName === 'refreshcommands' && config.TEST_MODE) {
+                await handleRefreshCommandsCommand(interaction);
             }
         } catch (error) {
             console.error('Error handling command:', error);
@@ -952,6 +980,8 @@ async function handleAddCommand(interaction) {
                 ephemeral: true
             });
         }
+    } else if (subcommand === 'view') {
+        await handleViewLicenses(interaction);
     }
 }
 
@@ -1283,6 +1313,266 @@ async function handleTestSimulate(interaction) {
         console.error('Error simulating payment:', error);
         await interaction.followUp({
             content: `❌ Simulation failed: ${error.message}`,
+            ephemeral: true
+        });
+    }
+}
+
+async function handleRefreshCommandsCommand(interaction) {
+    console.log(`🔄 Refresh commands requested by ${interaction.user.tag} (${interaction.user.id})`);
+    
+    if (interaction.user.id !== config.ADMIN_USER_ID) {
+        await interaction.reply({
+            content: '❌ You do not have permission to refresh commands.',
+            ephemeral: true
+        });
+        return;
+    }
+    
+    await interaction.deferReply({ ephemeral: true });
+    
+    try {
+        // Get current guild for instant command registration
+        const guild = interaction.guild;
+        
+        if (guild) {
+            // Register commands to this specific guild for instant updates
+            const commands = [
+                new SlashCommandBuilder()
+                    .setName('buy')
+                    .setDescription('Purchase a subscription to access premium features'),
+                
+                new SlashCommandBuilder()
+                    .setName('license')
+                    .setDescription('Check your current license status'),
+                    
+                new SlashCommandBuilder()
+                    .setName('payment')
+                    .setDescription('Check your pending crypto payment status'),
+                    
+                new SlashCommandBuilder()
+                    .setName('help')
+                    .setDescription('Get help with bot commands'),
+                    
+                new SlashCommandBuilder()
+                    .setName('myid')
+                    .setDescription('Get your Discord user ID (for admin setup)'),
+                    
+                new SlashCommandBuilder()
+                    .setName('add')
+                    .setDescription('Manage license keys (Admin only)')
+                    .addSubcommand(subcommand =>
+                        subcommand
+                            .setName('keys')
+                            .setDescription('Add multiple license keys'))
+                    .addSubcommand(subcommand =>
+                        subcommand
+                            .setName('view')
+                            .setDescription('View all license keys')
+                            .addStringOption(option =>
+                                option.setName('filter')
+                                    .setDescription('Filter by status or product type')
+                                    .setRequired(false)
+                                    .addChoices(
+                                        { name: 'Active Only', value: 'active' },
+                                        { name: 'Expired Only', value: 'expired' },
+                                        { name: '2 Weeks', value: '2weeks' },
+                                        { name: 'Monthly', value: 'monthly' },
+                                        { name: 'Lifetime', value: 'lifetime' },
+                                        { name: 'Manual Added', value: 'manual' },
+                                        { name: 'Recent (Last 10)', value: 'recent' }
+                                    )))
+            ];
+
+            // Add test commands if in test mode
+            if (config.TEST_MODE) {
+                commands.push(
+                    new SlashCommandBuilder()
+                        .setName('test')
+                        .setDescription('Test crypto payment monitoring (Admin only)')
+                        .addSubcommand(subcommand =>
+                            subcommand
+                                .setName('btc')
+                                .setDescription('Test BTC payment monitoring')
+                                .addStringOption(option =>
+                                    option.setName('amount')
+                                        .setDescription('BTC amount to test')
+                                        .setRequired(true)))
+                        .addSubcommand(subcommand =>
+                            subcommand
+                                .setName('ltc')
+                                .setDescription('Test LTC payment monitoring')
+                                .addStringOption(option =>
+                                    option.setName('amount')
+                                        .setDescription('LTC amount to test')
+                                        .setRequired(true)))
+                        .addSubcommand(subcommand =>
+                            subcommand
+                                .setName('simulate')
+                                .setDescription('Simulate a successful crypto payment')
+                                .addStringOption(option =>
+                                    option.setName('paymentid')
+                                        .setDescription('Payment ID to simulate')
+                                        .setRequired(true))),
+                    new SlashCommandBuilder()
+                        .setName('refreshcommands')
+                        .setDescription('Force refresh slash commands (Admin only)')
+                );
+            }
+            
+            await guild.commands.set(commands);
+            console.log(`✅ Commands refreshed for guild: ${guild.name} (${guild.id})`);
+            
+            await interaction.followUp({
+                content: `✅ Commands have been refreshed for this server!\n\n🧪 **Test Mode:** ${config.TEST_MODE ? 'Enabled' : 'Disabled'}\n📝 **Commands registered:** ${commands.length}\n\n${config.TEST_MODE ? '✅ Test commands are now available:\n• `/test btc`\n• `/test ltc`\n• `/test simulate`\n• `/refreshcommands`' : '⚠️ Test commands are disabled (TEST_MODE=false)'}`,
+                ephemeral: true
+            });
+        } else {
+            await interaction.followUp({
+                content: '❌ This command must be used in a server (not DMs).',
+                ephemeral: true
+            });
+        }
+        
+    } catch (error) {
+        console.error('Error refreshing commands:', error);
+        await interaction.followUp({
+            content: `❌ Error refreshing commands: ${error.message}`,
+            ephemeral: true
+        });
+    }
+}
+
+async function handleViewLicenses(interaction) {
+    console.log(`📋 View licenses command by ${interaction.user.tag} (${interaction.user.id})`);
+    
+    try {
+        const filter = interaction.options.getString('filter') || 'all';
+        const licenses = await readJSONFile(LICENSES_FILE);
+        
+        if (licenses.length === 0) {
+            await interaction.reply({
+                content: '📭 No license keys found in the database.',
+                ephemeral: true
+            });
+            return;
+        }
+        
+        // Apply filters
+        let filteredLicenses = [...licenses];
+        const now = new Date();
+        
+        switch (filter) {
+            case 'active':
+                filteredLicenses = licenses.filter(l => 
+                    l.isActive && new Date(l.expirationDate) > now
+                );
+                break;
+            case 'expired':
+                filteredLicenses = licenses.filter(l => 
+                    l.isActive && new Date(l.expirationDate) <= now
+                );
+                break;
+            case '2weeks':
+            case 'monthly':
+            case 'lifetime':
+                filteredLicenses = licenses.filter(l => l.productType === filter);
+                break;
+            case 'manual':
+                filteredLicenses = licenses.filter(l => l.addedManually === true);
+                break;
+            case 'recent':
+                filteredLicenses = licenses
+                    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                    .slice(0, 10);
+                break;
+        }
+        
+        if (filteredLicenses.length === 0) {
+            await interaction.reply({
+                content: `📭 No licenses found matching filter: ${filter}`,
+                ephemeral: true
+            });
+            return;
+        }
+        
+        // Create summary
+        const totalLicenses = licenses.length;
+        const activeLicenses = licenses.filter(l => l.isActive && new Date(l.expirationDate) > now).length;
+        const expiredLicenses = licenses.filter(l => l.isActive && new Date(l.expirationDate) <= now).length;
+        const inactiveLicenses = licenses.filter(l => !l.isActive).length;
+        
+        const summary = {
+            '2weeks': licenses.filter(l => l.productType === '2weeks').length,
+            'monthly': licenses.filter(l => l.productType === 'monthly').length,
+            'lifetime': licenses.filter(l => l.productType === 'lifetime').length,
+            'manual': licenses.filter(l => l.addedManually === true).length,
+            'fungies': licenses.filter(l => l.paymentMethod !== 'crypto' && !l.addedManually).length,
+            'crypto': licenses.filter(l => l.paymentMethod === 'crypto').length
+        };
+        
+        const embed = new EmbedBuilder()
+            .setTitle('📋 License Keys Database')
+            .setDescription(`Filter: **${filter}** • Showing ${filteredLicenses.length} of ${totalLicenses} total licenses`)
+            .setColor(0x00AE86)
+            .addFields(
+                {
+                    name: '📊 Summary Statistics',
+                    value: `**Total:** ${totalLicenses}\n**Active:** ${activeLicenses}\n**Expired:** ${expiredLicenses}\n**Inactive:** ${inactiveLicenses}`,
+                    inline: true
+                },
+                {
+                    name: '📦 By Product Type',
+                    value: `**2 Weeks:** ${summary['2weeks']}\n**Monthly:** ${summary.monthly}\n**Lifetime:** ${summary.lifetime}`,
+                    inline: true
+                },
+                {
+                    name: '💳 By Source',
+                    value: `**Manual:** ${summary.manual}\n**Fungies:** ${summary.fungies}\n**Crypto:** ${summary.crypto}`,
+                    inline: true
+                }
+            );
+        
+        // Add license details (limited to prevent message being too long)
+        const displayLimit = 8;
+        const displayLicenses = filteredLicenses.slice(0, displayLimit);
+        
+        if (displayLicenses.length > 0) {
+            const licenseList = displayLicenses.map(license => {
+                const expirationDate = new Date(license.expirationDate);
+                const isExpired = expirationDate <= now;
+                const status = !license.isActive ? '🔴 Inactive' : isExpired ? '🟡 Expired' : '🟢 Active';
+                const product = PRODUCTS[license.productType]?.name || license.productType;
+                const user = license.userId ? `<@${license.userId}>` : 'Unassigned';
+                const source = license.addedManually ? 'Manual' : license.paymentMethod === 'crypto' ? 'Crypto' : 'Fungies';
+                
+                return `\`${license.licenseKey}\`\n└ ${status} • ${product} • ${user} • ${source}`;
+            }).join('\n\n');
+            
+            embed.addFields({
+                name: `🔑 License Details (${displayLicenses.length}${filteredLicenses.length > displayLimit ? ` of ${filteredLicenses.length}` : ''})`,
+                value: licenseList.length > 1800 ? licenseList.substring(0, 1800) + '...' : licenseList,
+                inline: false
+            });
+            
+            if (filteredLicenses.length > displayLimit) {
+                embed.addFields({
+                    name: '📄 More Results',
+                    value: `Showing first ${displayLimit} results. Use more specific filters to see others.`,
+                    inline: false
+                });
+            }
+        }
+        
+        embed.setFooter({ text: `Database check completed • ${new Date().toLocaleString()}` })
+             .setTimestamp();
+        
+        await interaction.reply({ embeds: [embed], ephemeral: true });
+        
+    } catch (error) {
+        console.error('Error viewing licenses:', error);
+        await interaction.reply({
+            content: '❌ Error retrieving license data. Check console for details.',
             ephemeral: true
         });
     }
