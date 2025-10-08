@@ -28,7 +28,8 @@ const config = {
     PORT: process.env.PORT || 3000,
     WEBHOOK_URL: process.env.WEBHOOK_URL,
     LICENSE_KEY_SECRET: process.env.LICENSE_KEY_SECRET,
-    ADMIN_USER_ID: process.env.ADMIN_USER_ID
+    ADMIN_USER_ID: process.env.ADMIN_USER_ID,
+    TEST_MODE: process.env.TEST_MODE === 'true' || false
 };
 
 function validateEnvironmentVariables() {
@@ -77,12 +78,13 @@ const DATA_DIR = './data';
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const LICENSES_FILE = path.join(DATA_DIR, 'licenses.json');
 const PAYMENTS_FILE = path.join(DATA_DIR, 'payments.json');
+const CRYPTO_PAYMENTS_FILE = path.join(DATA_DIR, 'crypto_payments.json');
 
 async function initializeDataFiles() {
     try {
         await fs.mkdir(DATA_DIR, { recursive: true });
         
-        const files = [USERS_FILE, LICENSES_FILE, PAYMENTS_FILE];
+        const files = [USERS_FILE, LICENSES_FILE, PAYMENTS_FILE, CRYPTO_PAYMENTS_FILE];
         for (const file of files) {
             try {
                 await fs.access(file);
@@ -297,7 +299,7 @@ async function monitorCryptoPayment(paymentId) {
             return;
         }
         
-        const crypto = CRYPTO_CONFIG[payment.cryptoSymbol];
+        const crypto = CRYPTO_CONFIG[payment.cryptoSymbol.toUpperCase()];
         if (!crypto) {
             console.log(`Crypto config not found for ${payment.cryptoSymbol}`);
             return;
@@ -312,7 +314,7 @@ async function monitorCryptoPayment(paymentId) {
             
             try {
                 // Check if payment has expired
-                if (Date.now() > payment.expiresAt) {
+                if (Date.now() > new Date(payment.expiresAt).getTime()) {
                     console.log(`Payment ${paymentId} has expired`);
                     clearInterval(monitor);
                     await updatePaymentStatus(paymentId, 'expired');
@@ -321,10 +323,10 @@ async function monitorCryptoPayment(paymentId) {
                 
                 // Check blockchain for transaction
                 let result;
-                if (payment.cryptoSymbol === 'btc') {
-                    result = await checkBTCTransaction(crypto.address, payment.cryptoAmount, payment.createdAt);
-                } else if (payment.cryptoSymbol === 'ltc') {
-                    result = await checkLTCTransaction(crypto.address, payment.cryptoAmount, payment.createdAt);
+                if (payment.cryptoSymbol.toUpperCase() === 'BTC') {
+                    result = await checkBTCTransaction(crypto.address, payment.cryptoAmount, new Date(payment.createdAt).getTime());
+                } else if (payment.cryptoSymbol.toUpperCase() === 'LTC') {
+                    result = await checkLTCTransaction(crypto.address, payment.cryptoAmount, new Date(payment.createdAt).getTime());
                 }
                 
                 if (result && result.found) {
@@ -378,24 +380,26 @@ async function deliverCryptoLicense(payment, transactionResult) {
         const user = await client.users.fetch(payment.userId);
         const licenseKey = generateLicenseKey(payment.userId, payment.productType);
         
-        // Save license to file
-        const licenses = await readJSONFile('./data/licenses.json').catch(() => []);
+        // Save license to file - fix the structure to match other functions
+        const licenses = await readJSONFile(LICENSES_FILE).catch(() => []);
         const newLicense = {
-            key: licenseKey,
+            licenseKey: licenseKey,
             userId: payment.userId,
-            type: payment.productType,
-            createdAt: Date.now(),
-            expiresAt: Date.now() + (payment.productType === '2weeks' ? 14 : payment.productType === 'monthly' ? 30 : 365 * 10) * 24 * 60 * 60 * 1000,
-            paymentMethod: 'crypto',
+            productType: payment.productType,
+            productId: PRODUCTS[payment.productType].productId,
             paymentId: payment.paymentId,
+            isActive: true,
+            createdAt: new Date().toISOString(),
+            expirationDate: calculateExpirationDate(payment.productType).toISOString(),
+            paymentMethod: 'crypto',
             txid: transactionResult.txid
         };
         
         licenses.push(newLicense);
-        await writeJSONFile('./data/licenses.json', licenses);
+        await writeJSONFile(LICENSES_FILE, licenses);
         
         // Create redemption link
-        const redemptionLink = `https://your-redemption-site.com/redeem?key=${licenseKey}`;
+        const redemptionLink = `https://discord.com/channels/1381923242528477224/1381964183658037329/1393526095478919280`;
         
         // Send license to user
         const embed = new EmbedBuilder()
@@ -405,9 +409,9 @@ async function deliverCryptoLicense(payment, transactionResult) {
             .addFields(
                 { name: '📦 Product', value: PRODUCTS[payment.productType].name, inline: true },
                 { name: '💰 Amount', value: `${payment.cryptoAmount} ${payment.cryptoSymbol.toUpperCase()}`, inline: true },
-                { name: '🔗 Transaction', value: `[View on Blockchain](${payment.cryptoSymbol === 'btc' ? 'https://blockstream.info/tx/' : 'https://blockchair.com/litecoin/transaction/'}${transactionResult.txid})`, inline: true },
+                { name: '🔗 Transaction', value: `[View on Blockchain](${payment.cryptoSymbol.toLowerCase() === 'btc' ? 'https://blockstream.info/tx/' : 'https://blockchair.com/litecoin/transaction/'}${transactionResult.txid})`, inline: true },
                 { name: '🔑 License Key', value: `\`${licenseKey}\``, inline: false },
-                { name: '🌐 Redemption Link', value: `[Click here to redeem](${redemptionLink})`, inline: false }
+                { name: '� Redeem Your Key', value: `[Click here to redeem](${redemptionLink})`, inline: false }
             )
             .setFooter({ text: 'Thank you for your purchase!' })
             .setTimestamp();
@@ -423,7 +427,7 @@ async function deliverCryptoLicense(payment, transactionResult) {
             {
                 amount: `${payment.cryptoAmount} ${payment.cryptoSymbol.toUpperCase()}`,
                 txid: transactionResult.txid,
-                explorerUrl: `${payment.cryptoSymbol === 'btc' ? 'https://blockstream.info/tx/' : 'https://blockchair.com/litecoin/transaction/'}${transactionResult.txid}`,
+                explorerUrl: `${payment.cryptoSymbol.toLowerCase() === 'btc' ? 'https://blockstream.info/tx/' : 'https://blockchair.com/litecoin/transaction/'}${transactionResult.txid}`,
                 paymentId: payment.paymentId
             }
         );
@@ -446,7 +450,7 @@ async function cleanupExpiredPayments() {
             const payment = cryptoPayments[i];
             
             // Check if payment is expired and still pending
-            if (payment.status === 'pending' && now > payment.expiresAt) {
+            if (payment.status === 'pending' && now > new Date(payment.expiresAt).getTime()) {
                 console.log(`Cleaning up expired payment: ${payment.paymentId}`);
                 
                 // Update payment status
@@ -542,6 +546,9 @@ const CRYPTO_CONFIG = {
 
 client.once('clientReady', async () => {
     console.log(`✅ Bot is ready! Logged in as ${client.user.tag}`);
+    if (config.TEST_MODE) {
+        console.log('🧪 TEST MODE ENABLED - Test commands available');
+    }
     
     const commands = [
         new SlashCommandBuilder()
@@ -572,6 +579,39 @@ client.once('clientReady', async () => {
                     .setName('keys')
                     .setDescription('Add multiple license keys'))
     ];
+
+    // Add test commands in test mode
+    if (config.TEST_MODE) {
+        commands.push(
+            new SlashCommandBuilder()
+                .setName('test')
+                .setDescription('Test crypto payment monitoring (Admin only)')
+                .addSubcommand(subcommand =>
+                    subcommand
+                        .setName('btc')
+                        .setDescription('Test BTC payment monitoring')
+                        .addStringOption(option =>
+                            option.setName('amount')
+                                .setDescription('BTC amount to test')
+                                .setRequired(true)))
+                .addSubcommand(subcommand =>
+                    subcommand
+                        .setName('ltc')
+                        .setDescription('Test LTC payment monitoring')
+                        .addStringOption(option =>
+                            option.setName('amount')
+                                .setDescription('LTC amount to test')
+                                .setRequired(true)))
+                .addSubcommand(subcommand =>
+                    subcommand
+                        .setName('simulate')
+                        .setDescription('Simulate a successful crypto payment')
+                        .addStringOption(option =>
+                            option.setName('paymentid')
+                                .setDescription('Payment ID to simulate')
+                                .setRequired(true)))
+        );
+    }
 
     try {
         console.log('🔄 Started refreshing application (/) commands.');
@@ -604,6 +644,8 @@ client.on('interactionCreate', async interaction => {
                 await handleMyIdCommand(interaction);
             } else if (commandName === 'add') {
                 await handleAddCommand(interaction);
+            } else if (commandName === 'test' && config.TEST_MODE) {
+                await handleTestCommand(interaction);
             }
         } catch (error) {
             console.error('Error handling command:', error);
@@ -758,8 +800,8 @@ async function handlePaymentStatusCommand(interaction) {
         
         userPayments.forEach(payment => {
             const product = PRODUCTS[payment.productType];
-            const crypto = CRYPTO_CONFIG[payment.cryptoSymbol];
-            const timeLeft = Math.max(0, payment.expiresAt - Date.now());
+            const crypto = CRYPTO_CONFIG[payment.cryptoSymbol.toUpperCase()];
+            const timeLeft = Math.max(0, new Date(payment.expiresAt).getTime() - Date.now());
             const minutesLeft = Math.floor(timeLeft / (1000 * 60));
             
             embed.addFields({
@@ -769,7 +811,7 @@ async function handlePaymentStatusCommand(interaction) {
             });
         });
         
-        if (userPayments.some(p => p.expiresAt > Date.now())) {
+        if (userPayments.some(p => new Date(p.expiresAt).getTime() > Date.now())) {
             embed.setFooter({ text: 'Send the exact amount to the wallet address to complete your purchase.' });
         }
         
@@ -1055,6 +1097,197 @@ async function handleAddKeysModal(interaction) {
     }
 }
 
+async function handleTestCommand(interaction) {
+    console.log(`🧪 Test command attempted by ${interaction.user.tag} (${interaction.user.id})`);
+    
+    if (interaction.user.id !== config.ADMIN_USER_ID) {
+        await interaction.reply({
+            content: '❌ You do not have permission to use test commands.',
+            ephemeral: true
+        });
+        return;
+    }
+
+    const subcommand = interaction.options.getSubcommand();
+    
+    try {
+        if (subcommand === 'btc') {
+            await handleTestBTC(interaction);
+        } else if (subcommand === 'ltc') {
+            await handleTestLTC(interaction);
+        } else if (subcommand === 'simulate') {
+            await handleTestSimulate(interaction);
+        }
+    } catch (error) {
+        console.error('Error handling test command:', error);
+        await interaction.reply({
+            content: '❌ Test command failed. Check console for details.',
+            ephemeral: true
+        });
+    }
+}
+
+async function handleTestBTC(interaction) {
+    const amount = parseFloat(interaction.options.getString('amount'));
+    const address = CRYPTO_CONFIG.BTC.address;
+    
+    await interaction.reply({
+        content: '🧪 Testing BTC payment monitoring...',
+        ephemeral: true
+    });
+    
+    console.log(`🧪 Testing BTC transaction check:`);
+    console.log(`  - Address: ${address}`);
+    console.log(`  - Expected amount: ${amount} BTC`);
+    console.log(`  - Since: ${new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()}`);
+    
+    try {
+        const result = await checkBTCTransaction(address, amount, Date.now() - 24 * 60 * 60 * 1000);
+        
+        const embed = new EmbedBuilder()
+            .setTitle('🧪 BTC Test Results')
+            .setColor(result.found ? 0x00ff00 : 0xff6b6b)
+            .addFields(
+                { name: '🎯 Test Parameters', value: `Address: \`${address}\`\nAmount: ${amount} BTC`, inline: false },
+                { name: '📊 Result', value: result.found ? '✅ Transaction Found!' : '❌ No matching transaction', inline: false }
+            );
+        
+        if (result.found) {
+            embed.addFields(
+                { name: '🔗 Transaction ID', value: `\`${result.txid}\``, inline: true },
+                { name: '💰 Amount', value: `${result.amount} BTC`, inline: true },
+                { name: '✅ Confirmations', value: `${result.confirmations}`, inline: true }
+            );
+        }
+        
+        if (result.error) {
+            embed.addFields({ name: '❌ Error', value: result.error, inline: false });
+        }
+        
+        await interaction.followUp({ embeds: [embed], ephemeral: true });
+        
+    } catch (error) {
+        await interaction.followUp({
+            content: `❌ BTC test failed: ${error.message}`,
+            ephemeral: true
+        });
+    }
+}
+
+async function handleTestLTC(interaction) {
+    const amount = parseFloat(interaction.options.getString('amount'));
+    const address = CRYPTO_CONFIG.LTC.address;
+    
+    await interaction.reply({
+        content: '🧪 Testing LTC payment monitoring...',
+        ephemeral: true
+    });
+    
+    console.log(`🧪 Testing LTC transaction check:`);
+    console.log(`  - Address: ${address}`);
+    console.log(`  - Expected amount: ${amount} LTC`);
+    console.log(`  - Since: ${new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()}`);
+    
+    try {
+        const result = await checkLTCTransaction(address, amount, Date.now() - 24 * 60 * 60 * 1000);
+        
+        const embed = new EmbedBuilder()
+            .setTitle('🧪 LTC Test Results')
+            .setColor(result.found ? 0x00ff00 : 0xff6b6b)
+            .addFields(
+                { name: '🎯 Test Parameters', value: `Address: \`${address}\`\nAmount: ${amount} LTC`, inline: false },
+                { name: '📊 Result', value: result.found ? '✅ Transaction Found!' : '❌ No matching transaction', inline: false }
+            );
+        
+        if (result.found) {
+            embed.addFields(
+                { name: '🔗 Transaction ID', value: `\`${result.txid}\``, inline: true },
+                { name: '💰 Amount', value: `${result.amount} LTC`, inline: true },
+                { name: '✅ Confirmations', value: `${result.confirmations}`, inline: true }
+            );
+        }
+        
+        if (result.error) {
+            embed.addFields({ name: '❌ Error', value: result.error, inline: false });
+        }
+        
+        await interaction.followUp({ embeds: [embed], ephemeral: true });
+        
+    } catch (error) {
+        await interaction.followUp({
+            content: `❌ LTC test failed: ${error.message}`,
+            ephemeral: true
+        });
+    }
+}
+
+async function handleTestSimulate(interaction) {
+    const paymentId = interaction.options.getString('paymentid');
+    
+    await interaction.reply({
+        content: '🧪 Simulating successful crypto payment...',
+        ephemeral: true
+    });
+    
+    try {
+        const cryptoPayments = await readJSONFile('./data/crypto_payments.json').catch(() => []);
+        const payment = cryptoPayments.find(p => p.paymentId === paymentId);
+        
+        if (!payment) {
+            await interaction.followUp({
+                content: `❌ Payment ID ${paymentId} not found.`,
+                ephemeral: true
+            });
+            return;
+        }
+        
+        if (payment.status !== 'pending') {
+            await interaction.followUp({
+                content: `❌ Payment ${paymentId} is not pending (status: ${payment.status}).`,
+                ephemeral: true
+            });
+            return;
+        }
+        
+        // Simulate a successful transaction
+        const mockResult = {
+            found: true,
+            txid: `test_${Date.now()}_simulation`,
+            amount: payment.cryptoAmount,
+            confirmations: 1
+        };
+        
+        console.log(`🧪 Simulating successful payment for ${paymentId}`);
+        
+        // Update payment status
+        await updatePaymentStatus(paymentId, 'completed', mockResult.txid);
+        
+        // Deliver license
+        await deliverCryptoLicense(payment, mockResult);
+        
+        const embed = new EmbedBuilder()
+            .setTitle('🧪 Payment Simulation Successful')
+            .setColor(0x00ff00)
+            .addFields(
+                { name: '🆔 Payment ID', value: paymentId, inline: true },
+                { name: '💰 Amount', value: `${payment.cryptoAmount} ${payment.cryptoSymbol.toUpperCase()}`, inline: true },
+                { name: '🔗 Mock TX ID', value: mockResult.txid, inline: false },
+                { name: '📦 Product', value: PRODUCTS[payment.productType].name, inline: true },
+                { name: '👤 User', value: `<@${payment.userId}>`, inline: true }
+            )
+            .setFooter({ text: 'This was a test simulation' });
+        
+        await interaction.followUp({ embeds: [embed], ephemeral: true });
+        
+    } catch (error) {
+        console.error('Error simulating payment:', error);
+        await interaction.followUp({
+            content: `❌ Simulation failed: ${error.message}`,
+            ephemeral: true
+        });
+    }
+}
+
 client.on('interactionCreate', async interaction => {
     if (!interaction.isButton()) return;
 
@@ -1206,19 +1439,19 @@ async function handleCryptoPayment(interaction, productType, cryptoSymbol) {
         const cryptoAmount = await calculateCryptoAmount(product.cryptoPrice, cryptoSymbol);
         const paymentId = generateCryptoPaymentId();
         
-        // Store pending crypto payment
+        // Store pending crypto payment - fix structure
         const cryptoPayments = await readJSONFile('./data/crypto_payments.json').catch(() => []);
         const cryptoPayment = {
             paymentId,
             userId,
             productType,
-            cryptoSymbol,
+            cryptoSymbol: cryptoSymbol.toLowerCase(),
             cryptoAmount,
             usdAmount: product.cryptoPrice,
             address: crypto.address,
             status: 'pending',
             createdAt: new Date().toISOString(),
-            expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString() // 30 minutes
+            expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString()
         };
         
         cryptoPayments.push(cryptoPayment);
@@ -1747,6 +1980,45 @@ app.get('/validate/:licenseKey', async (req, res) => {
     }
 });
 
+// Test mode crypto monitoring status endpoint
+if (config.TEST_MODE) {
+    app.get('/crypto-status', async (req, res) => {
+        try {
+            const cryptoPayments = await readJSONFile('./data/crypto_payments.json').catch(() => []);
+            
+            res.status(200).json({
+                testMode: true,
+                cryptoConfig: {
+                    BTC: {
+                        address: CRYPTO_CONFIG.BTC.address,
+                        apiUrl: CRYPTO_CONFIG.BTC.apiUrl
+                    },
+                    LTC: {
+                        address: CRYPTO_CONFIG.LTC.address,
+                        apiUrl: CRYPTO_CONFIG.LTC.apiUrl
+                    }
+                },
+                pendingPayments: cryptoPayments.filter(p => p.status === 'pending').length,
+                completedPayments: cryptoPayments.filter(p => p.status === 'completed').length,
+                expiredPayments: cryptoPayments.filter(p => p.status === 'expired').length,
+                recentPayments: cryptoPayments.slice(-5).map(p => ({
+                    paymentId: p.paymentId,
+                    status: p.status,
+                    cryptoSymbol: p.cryptoSymbol,
+                    amount: p.cryptoAmount,
+                    createdAt: p.createdAt,
+                    expiresAt: p.expiresAt
+                }))
+            });
+        } catch (error) {
+            res.status(500).json({ error: error.message });
+        }
+    });
+}
+
 app.listen(config.PORT, () => {
     console.log(`🌐 Webhook server running on port ${config.PORT}`);
+    if (config.TEST_MODE) {
+        console.log(`🧪 Test mode endpoints available at /crypto-status`);
+    }
 });
