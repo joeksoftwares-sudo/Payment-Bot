@@ -610,7 +610,11 @@ client.once('clientReady', async () => {
                         .addStringOption(option =>
                             option.setName('amount')
                                 .setDescription('BTC amount to test')
-                                .setRequired(true)))
+                                .setRequired(true))
+                        .addStringOption(option =>
+                            option.setName('date')
+                                .setDescription('Payment date (YYYY-MM-DD or YYYY-MM-DD HH:MM)')
+                                .setRequired(false)))
                 .addSubcommand(subcommand =>
                     subcommand
                         .setName('ltc')
@@ -618,7 +622,11 @@ client.once('clientReady', async () => {
                         .addStringOption(option =>
                             option.setName('amount')
                                 .setDescription('LTC amount to test')
-                                .setRequired(true)))
+                                .setRequired(true))
+                        .addStringOption(option =>
+                            option.setName('date')
+                                .setDescription('Payment date (YYYY-MM-DD or YYYY-MM-DD HH:MM)')
+                                .setRequired(false)))
                 .addSubcommand(subcommand =>
                     subcommand
                         .setName('simulate')
@@ -626,7 +634,11 @@ client.once('clientReady', async () => {
                         .addStringOption(option =>
                             option.setName('paymentid')
                                 .setDescription('Payment ID to simulate')
-                                .setRequired(true))),
+                                .setRequired(true))
+                        .addStringOption(option =>
+                            option.setName('date')
+                                .setDescription('Payment date (YYYY-MM-DD or YYYY-MM-DD HH:MM)')
+                                .setRequired(false))),
             new SlashCommandBuilder()
                 .setName('refreshcommands')
                 .setDescription('Force refresh slash commands (Admin only)')
@@ -1127,6 +1139,34 @@ async function handleAddKeysModal(interaction) {
     }
 }
 
+function parseTestDate(dateString) {
+    if (!dateString) {
+        // Default to 24 hours ago
+        return Date.now() - 24 * 60 * 60 * 1000;
+    }
+    
+    try {
+        // Support formats: YYYY-MM-DD or YYYY-MM-DD HH:MM
+        let parsedDate;
+        
+        if (dateString.includes(' ')) {
+            // Format: YYYY-MM-DD HH:MM
+            parsedDate = new Date(dateString.replace(' ', 'T') + ':00.000Z');
+        } else {
+            // Format: YYYY-MM-DD (default to start of day)
+            parsedDate = new Date(dateString + 'T00:00:00.000Z');
+        }
+        
+        if (isNaN(parsedDate.getTime())) {
+            throw new Error('Invalid date format');
+        }
+        
+        return parsedDate.getTime();
+    } catch (error) {
+        throw new Error(`Invalid date format. Use YYYY-MM-DD or YYYY-MM-DD HH:MM (e.g., 2025-10-08 or 2025-10-08 14:30)`);
+    }
+}
+
 async function handleTestCommand(interaction) {
     console.log(`🧪 Test command attempted by ${interaction.user.tag} (${interaction.user.id})`);
     
@@ -1159,6 +1199,7 @@ async function handleTestCommand(interaction) {
 
 async function handleTestBTC(interaction) {
     const amount = parseFloat(interaction.options.getString('amount'));
+    const dateString = interaction.options.getString('date');
     const address = CRYPTO_CONFIG.BTC.address;
     
     await interaction.reply({
@@ -1166,19 +1207,26 @@ async function handleTestBTC(interaction) {
         ephemeral: true
     });
     
-    console.log(`🧪 Testing BTC transaction check:`);
-    console.log(`  - Address: ${address}`);
-    console.log(`  - Expected amount: ${amount} BTC`);
-    console.log(`  - Since: ${new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()}`);
-    
     try {
-        const result = await checkBTCTransaction(address, amount, Date.now() - 24 * 60 * 60 * 1000);
+        const sinceTimestamp = parseTestDate(dateString);
+        const sinceDate = new Date(sinceTimestamp);
+        
+        console.log(`🧪 Testing BTC transaction check:`);
+        console.log(`  - Address: ${address}`);
+        console.log(`  - Expected amount: ${amount} BTC`);
+        console.log(`  - Since: ${sinceDate.toISOString()} (${dateString || 'default: 24h ago'})`);
+        
+        const result = await checkBTCTransaction(address, amount, sinceTimestamp);
         
         const embed = new EmbedBuilder()
             .setTitle('🧪 BTC Test Results')
             .setColor(result.found ? 0x00ff00 : 0xff6b6b)
             .addFields(
-                { name: '🎯 Test Parameters', value: `Address: \`${address}\`\nAmount: ${amount} BTC`, inline: false },
+                { 
+                    name: '🎯 Test Parameters', 
+                    value: `**Address:** \`${address}\`\n**Amount:** ${amount} BTC\n**Since:** ${sinceDate.toLocaleString()} ${dateString ? '(Custom)' : '(24h ago)'}`, 
+                    inline: false 
+                },
                 { name: '📊 Result', value: result.found ? '✅ Transaction Found!' : '❌ No matching transaction', inline: false }
             );
         
@@ -1186,7 +1234,8 @@ async function handleTestBTC(interaction) {
             embed.addFields(
                 { name: '🔗 Transaction ID', value: `\`${result.txid}\``, inline: true },
                 { name: '💰 Amount', value: `${result.amount} BTC`, inline: true },
-                { name: '✅ Confirmations', value: `${result.confirmations}`, inline: true }
+                { name: '✅ Confirmations', value: `${result.confirmations}`, inline: true },
+                { name: '📅 Transaction Time', value: new Date(result.timestamp * 1000).toLocaleString(), inline: false }
             );
         }
         
@@ -1195,10 +1244,9 @@ async function handleTestBTC(interaction) {
         }
         
         await interaction.followUp({ embeds: [embed], ephemeral: true });
-        
     } catch (error) {
         await interaction.followUp({
-            content: `❌ BTC test failed: ${error.message}`,
+            content: `❌ Test failed: ${error.message}`,
             ephemeral: true
         });
     }
@@ -1206,6 +1254,7 @@ async function handleTestBTC(interaction) {
 
 async function handleTestLTC(interaction) {
     const amount = parseFloat(interaction.options.getString('amount'));
+    const dateString = interaction.options.getString('date');
     const address = CRYPTO_CONFIG.LTC.address;
     
     await interaction.reply({
@@ -1213,19 +1262,26 @@ async function handleTestLTC(interaction) {
         ephemeral: true
     });
     
-    console.log(`🧪 Testing LTC transaction check:`);
-    console.log(`  - Address: ${address}`);
-    console.log(`  - Expected amount: ${amount} LTC`);
-    console.log(`  - Since: ${new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()}`);
-    
     try {
-        const result = await checkLTCTransaction(address, amount, Date.now() - 24 * 60 * 60 * 1000);
+        const sinceTimestamp = parseTestDate(dateString);
+        const sinceDate = new Date(sinceTimestamp);
+        
+        console.log(`🧪 Testing LTC transaction check:`);
+        console.log(`  - Address: ${address}`);
+        console.log(`  - Expected amount: ${amount} LTC`);
+        console.log(`  - Since: ${sinceDate.toISOString()} (${dateString || 'default: 24h ago'})`);
+        
+        const result = await checkLTCTransaction(address, amount, sinceTimestamp);
         
         const embed = new EmbedBuilder()
             .setTitle('🧪 LTC Test Results')
             .setColor(result.found ? 0x00ff00 : 0xff6b6b)
             .addFields(
-                { name: '🎯 Test Parameters', value: `Address: \`${address}\`\nAmount: ${amount} LTC`, inline: false },
+                { 
+                    name: '🎯 Test Parameters', 
+                    value: `**Address:** \`${address}\`\n**Amount:** ${amount} LTC\n**Since:** ${sinceDate.toLocaleString()} ${dateString ? '(Custom)' : '(24h ago)'}`, 
+                    inline: false 
+                },
                 { name: '📊 Result', value: result.found ? '✅ Transaction Found!' : '❌ No matching transaction', inline: false }
             );
         
@@ -1233,7 +1289,8 @@ async function handleTestLTC(interaction) {
             embed.addFields(
                 { name: '🔗 Transaction ID', value: `\`${result.txid}\``, inline: true },
                 { name: '💰 Amount', value: `${result.amount} LTC`, inline: true },
-                { name: '✅ Confirmations', value: `${result.confirmations}`, inline: true }
+                { name: '✅ Confirmations', value: `${result.confirmations}`, inline: true },
+                { name: '📅 Transaction Time', value: new Date(result.time * 1000).toLocaleString(), inline: false }
             );
         }
         
@@ -1242,10 +1299,9 @@ async function handleTestLTC(interaction) {
         }
         
         await interaction.followUp({ embeds: [embed], ephemeral: true });
-        
     } catch (error) {
         await interaction.followUp({
-            content: `❌ LTC test failed: ${error.message}`,
+            content: `❌ Test failed: ${error.message}`,
             ephemeral: true
         });
     }
@@ -1253,6 +1309,7 @@ async function handleTestLTC(interaction) {
 
 async function handleTestSimulate(interaction) {
     const paymentId = interaction.options.getString('paymentid');
+    const dateString = interaction.options.getString('date');
     
     await interaction.reply({
         content: '🧪 Simulating successful crypto payment...',
@@ -1260,6 +1317,11 @@ async function handleTestSimulate(interaction) {
     });
     
     try {
+        let customTimestamp = null;
+        if (dateString) {
+            customTimestamp = parseTestDate(dateString);
+        }
+        
         const cryptoPayments = await readJSONFile('./data/crypto_payments.json').catch(() => []);
         const payment = cryptoPayments.find(p => p.paymentId === paymentId);
         
@@ -1279,17 +1341,23 @@ async function handleTestSimulate(interaction) {
             return;
         }
         
-        // Simulate a successful transaction
+        // Simulate a successful transaction with custom timestamp if provided
         const mockResult = {
             found: true,
             txid: `test_${Date.now()}_simulation`,
             amount: payment.cryptoAmount,
-            confirmations: 1
+            confirmations: 1,
+            timestamp: customTimestamp ? Math.floor(customTimestamp / 1000) : Math.floor(Date.now() / 1000)
         };
         
-        console.log(`🧪 Simulating successful payment for ${paymentId}`);
+        console.log(`🧪 Simulating successful payment for ${paymentId}${customTimestamp ? ` with custom date: ${new Date(customTimestamp).toISOString()}` : ''}`);
         
-        // Update payment status
+        // Update payment status with custom timestamp if provided
+        if (customTimestamp) {
+            // Update the payment object with custom date
+            payment.completedAt = customTimestamp;
+        }
+        
         await updatePaymentStatus(paymentId, 'completed', mockResult.txid);
         
         // Deliver license
@@ -1304,8 +1372,17 @@ async function handleTestSimulate(interaction) {
                 { name: '🔗 Mock TX ID', value: mockResult.txid, inline: false },
                 { name: '📦 Product', value: PRODUCTS[payment.productType].name, inline: true },
                 { name: '👤 User', value: `<@${payment.userId}>`, inline: true }
-            )
-            .setFooter({ text: 'This was a test simulation' });
+            );
+            
+        if (customTimestamp) {
+            embed.addFields({
+                name: '📅 Custom Date',
+                value: `${new Date(customTimestamp).toLocaleString()} ${dateString ? '(Custom)' : ''}`,
+                inline: false
+            });
+        }
+        
+        embed.setFooter({ text: 'This was a test simulation' });
         
         await interaction.followUp({ embeds: [embed], ephemeral: true });
         
@@ -1397,7 +1474,11 @@ async function handleRefreshCommandsCommand(interaction) {
                                 .addStringOption(option =>
                                     option.setName('amount')
                                         .setDescription('BTC amount to test')
-                                        .setRequired(true)))
+                                        .setRequired(true))
+                                .addStringOption(option =>
+                                    option.setName('date')
+                                        .setDescription('Payment date (YYYY-MM-DD or YYYY-MM-DD HH:MM)')
+                                        .setRequired(false)))
                         .addSubcommand(subcommand =>
                             subcommand
                                 .setName('ltc')
@@ -1405,7 +1486,11 @@ async function handleRefreshCommandsCommand(interaction) {
                                 .addStringOption(option =>
                                     option.setName('amount')
                                         .setDescription('LTC amount to test')
-                                        .setRequired(true)))
+                                        .setRequired(true))
+                                .addStringOption(option =>
+                                    option.setName('date')
+                                        .setDescription('Payment date (YYYY-MM-DD or YYYY-MM-DD HH:MM)')
+                                        .setRequired(false)))
                         .addSubcommand(subcommand =>
                             subcommand
                                 .setName('simulate')
@@ -1413,7 +1498,11 @@ async function handleRefreshCommandsCommand(interaction) {
                                 .addStringOption(option =>
                                     option.setName('paymentid')
                                         .setDescription('Payment ID to simulate')
-                                        .setRequired(true))),
+                                        .setRequired(true))
+                                .addStringOption(option =>
+                                    option.setName('date')
+                                        .setDescription('Payment date (YYYY-MM-DD or YYYY-MM-DD HH:MM)')
+                                        .setRequired(false))),
                     new SlashCommandBuilder()
                         .setName('refreshcommands')
                         .setDescription('Force refresh slash commands (Admin only)')
@@ -1424,7 +1513,7 @@ async function handleRefreshCommandsCommand(interaction) {
             console.log(`✅ Commands refreshed for guild: ${guild.name} (${guild.id})`);
             
             await interaction.followUp({
-                content: `✅ Commands have been refreshed for this server!\n\n🧪 **Test Mode:** ${config.TEST_MODE ? 'Enabled' : 'Disabled'}\n📝 **Commands registered:** ${commands.length}\n\n${config.TEST_MODE ? '✅ Test commands are now available:\n• `/test btc`\n• `/test ltc`\n• `/test simulate`\n• `/refreshcommands`' : '⚠️ Test commands are disabled (TEST_MODE=false)'}`,
+                content: `✅ Commands have been refreshed for this server!\n\n🧪 **Test Mode:** ${config.TEST_MODE ? 'Enabled' : 'Disabled'}\n📝 **Commands registered:** ${commands.length}\n\n${config.TEST_MODE ? '✅ Test commands are now available:\n• `/test btc amount date` - Test BTC monitoring\n• `/test ltc amount date` - Test LTC monitoring\n• `/test simulate paymentid date` - Simulate payment\n• `/refreshcommands` - Refresh commands\n\n📅 **Date format:** YYYY-MM-DD or YYYY-MM-DD HH:MM\n📝 **Date is optional** - defaults to 24 hours ago' : '⚠️ Test commands are disabled (TEST_MODE=false)'}`,
                 ephemeral: true
             });
         } else {
