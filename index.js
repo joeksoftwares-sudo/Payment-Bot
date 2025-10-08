@@ -223,17 +223,27 @@ async function checkBTCTransaction(address, expectedAmount, since) {
             // Check if transaction is after payment creation time
             if (tx.status.block_time && tx.status.block_time * 1000 < since) continue;
             
-            // Check outputs for exact amount to our address
+            // Check outputs for amount to our address
             for (const output of tx.vout) {
                 if (output.scriptpubkey_address === address) {
                     const receivedAmount = output.value / 100000000; // Convert satoshis to BTC
-                    if (Math.abs(receivedAmount - expectedAmount) < 0.00001) { // Allow for tiny rounding differences
+                    
+                    // Use tolerance check
+                    const toleranceCheck = await isPaymentWithinTolerance(expectedAmount, receivedAmount, 'BTC');
+                    
+                    if (toleranceCheck.accepted) {
+                        console.log(`✅ BTC payment accepted: ${toleranceCheck.reason}`);
                         return {
                             found: true,
                             txid: tx.txid,
                             amount: receivedAmount,
-                            confirmations: tx.status.confirmed ? 1 : 0
+                            expectedAmount: expectedAmount,
+                            confirmations: tx.status.confirmed ? 1 : 0,
+                            timestamp: tx.status.block_time,
+                            toleranceInfo: toleranceCheck
                         };
+                    } else {
+                        console.log(`❌ BTC payment rejected: ${toleranceCheck.reason} (expected: ${expectedAmount}, received: ${receivedAmount})`);
                     }
                 }
             }
@@ -262,18 +272,28 @@ async function checkLTCTransaction(address, expectedAmount, since) {
                     // Check if transaction is after payment creation time
                     if (new Date(tx.time).getTime() < since) continue;
                     
-                    // Check outputs for exact amount to our address
+                    // Check outputs for amount to our address
                     const outputs = txData.data[txHash].outputs;
                     for (const output of outputs) {
                         if (output.recipient === address) {
                             const receivedAmount = output.value / 100000000; // Convert to LTC
-                            if (Math.abs(receivedAmount - expectedAmount) < 0.00001) {
+                            
+                            // Use tolerance check
+                            const toleranceCheck = await isPaymentWithinTolerance(expectedAmount, receivedAmount, 'LTC');
+                            
+                            if (toleranceCheck.accepted) {
+                                console.log(`✅ LTC payment accepted: ${toleranceCheck.reason}`);
                                 return {
                                     found: true,
                                     txid: txHash,
                                     amount: receivedAmount,
-                                    confirmations: tx.block_id ? 1 : 0
+                                    expectedAmount: expectedAmount,
+                                    confirmations: tx.block_id ? 1 : 0,
+                                    time: new Date(tx.time).getTime() / 1000,
+                                    toleranceInfo: toleranceCheck
                                 };
+                            } else {
+                                console.log(`❌ LTC payment rejected: ${toleranceCheck.reason} (expected: ${expectedAmount}, received: ${receivedAmount})`);
                             }
                         }
                     }
@@ -533,16 +553,61 @@ const CRYPTO_CONFIG = {
         symbol: 'BTC',
         address: 'bc1q8tdnwuhw2vqcyp5dfpzwjzgf2t3rsdamug9zf9',
         apiUrl: 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd',
-        priceField: 'bitcoin.usd'
+        priceField: 'bitcoin.usd',
+        toleranceUSD: 0.2  // Accept payments within $0.20 of expected amount
     },
     LTC: {
         name: 'Litecoin',
         symbol: 'LTC',
         address: 'LRQ4nSdQaEccRfPNbaKtJ7SU3Ka3P8Eo9D',
         apiUrl: 'https://api.coingecko.com/api/v3/simple/price?ids=litecoin&vs_currencies=usd',
-        priceField: 'litecoin.usd'
+        priceField: 'litecoin.usd',
+        toleranceUSD: 0.2  // Accept payments within $0.20 of expected amount
     }
 };
+
+// Check if payment amount is within acceptable tolerance
+async function isPaymentWithinTolerance(expectedAmount, receivedAmount, cryptoSymbol) {
+    try {
+        const crypto = CRYPTO_CONFIG[cryptoSymbol.toUpperCase()];
+        if (!crypto) return false;
+        
+        // Get current crypto price in USD
+        const response = await fetch(crypto.apiUrl);
+        const data = await response.json();
+        const priceUSD = data[crypto.priceField.split('.')[0]][crypto.priceField.split('.')[1]];
+        
+        // Calculate expected and received amounts in USD
+        const expectedUSD = expectedAmount * priceUSD;
+        const receivedUSD = receivedAmount * priceUSD;
+        const differenceUSD = Math.abs(expectedUSD - receivedUSD);
+        
+        console.log(`💰 Payment tolerance check for ${cryptoSymbol}:`);
+        console.log(`  - Expected: ${expectedAmount} ${cryptoSymbol} ($${expectedUSD.toFixed(2)})`);
+        console.log(`  - Received: ${receivedAmount} ${cryptoSymbol} ($${receivedUSD.toFixed(2)})`);
+        console.log(`  - Difference: $${differenceUSD.toFixed(2)} (tolerance: $${crypto.toleranceUSD})`);
+        
+        // Accept if received amount is equal or greater than expected, OR within tolerance
+        const isWithinTolerance = receivedAmount >= expectedAmount || differenceUSD <= crypto.toleranceUSD;
+        
+        return {
+            accepted: isWithinTolerance,
+            expectedUSD: expectedUSD,
+            receivedUSD: receivedUSD,
+            differenceUSD: differenceUSD,
+            toleranceUSD: crypto.toleranceUSD,
+            reason: receivedAmount >= expectedAmount ? 'exact_or_overpaid' : 
+                   isWithinTolerance ? 'within_tolerance' : 'outside_tolerance'
+        };
+    } catch (error) {
+        console.error('Error checking payment tolerance:', error);
+        // Fallback to exact amount check if tolerance check fails
+        return {
+            accepted: receivedAmount >= expectedAmount,
+            reason: 'tolerance_check_failed'
+        };
+    }
+}
 
 client.once('clientReady', async () => {
     console.log(`✅ Bot is ready! Logged in as ${client.user.tag}`);
@@ -1231,12 +1296,30 @@ async function handleTestBTC(interaction) {
             );
         
         if (result.found) {
+            const toleranceInfo = result.toleranceInfo;
             embed.addFields(
                 { name: '🔗 Transaction ID', value: `\`${result.txid}\``, inline: true },
-                { name: '💰 Amount', value: `${result.amount} BTC`, inline: true },
+                { name: '💰 Received Amount', value: `${result.amount} BTC`, inline: true },
                 { name: '✅ Confirmations', value: `${result.confirmations}`, inline: true },
                 { name: '📅 Transaction Time', value: new Date(result.timestamp * 1000).toLocaleString(), inline: false }
             );
+            
+            if (toleranceInfo) {
+                const statusEmoji = toleranceInfo.reason === 'exact_or_overpaid' ? '✅' : 
+                                  toleranceInfo.reason === 'within_tolerance' ? '⚠️' : '❌';
+                const statusText = toleranceInfo.reason === 'exact_or_overpaid' ? 'Exact/Overpaid' : 
+                                 toleranceInfo.reason === 'within_tolerance' ? 'Within Tolerance' : 'Outside Tolerance';
+                
+                embed.addFields({
+                    name: '💵 Payment Analysis',
+                    value: `${statusEmoji} **Status:** ${statusText}\n` +
+                          `**Expected:** $${toleranceInfo.expectedUSD?.toFixed(2) || 'N/A'}\n` +
+                          `**Received:** $${toleranceInfo.receivedUSD?.toFixed(2) || 'N/A'}\n` +
+                          `**Difference:** $${toleranceInfo.differenceUSD?.toFixed(2) || 'N/A'}\n` +
+                          `**Tolerance:** $${toleranceInfo.toleranceUSD || '0.20'}`,
+                    inline: false
+                });
+            }
         }
         
         if (result.error) {
@@ -1286,12 +1369,30 @@ async function handleTestLTC(interaction) {
             );
         
         if (result.found) {
+            const toleranceInfo = result.toleranceInfo;
             embed.addFields(
                 { name: '🔗 Transaction ID', value: `\`${result.txid}\``, inline: true },
-                { name: '💰 Amount', value: `${result.amount} LTC`, inline: true },
+                { name: '💰 Received Amount', value: `${result.amount} LTC`, inline: true },
                 { name: '✅ Confirmations', value: `${result.confirmations}`, inline: true },
                 { name: '📅 Transaction Time', value: new Date(result.time * 1000).toLocaleString(), inline: false }
             );
+            
+            if (toleranceInfo) {
+                const statusEmoji = toleranceInfo.reason === 'exact_or_overpaid' ? '✅' : 
+                                  toleranceInfo.reason === 'within_tolerance' ? '⚠️' : '❌';
+                const statusText = toleranceInfo.reason === 'exact_or_overpaid' ? 'Exact/Overpaid' : 
+                                 toleranceInfo.reason === 'within_tolerance' ? 'Within Tolerance' : 'Outside Tolerance';
+                
+                embed.addFields({
+                    name: '💵 Payment Analysis',
+                    value: `${statusEmoji} **Status:** ${statusText}\n` +
+                          `**Expected:** $${toleranceInfo.expectedUSD?.toFixed(2) || 'N/A'}\n` +
+                          `**Received:** $${toleranceInfo.receivedUSD?.toFixed(2) || 'N/A'}\n` +
+                          `**Difference:** $${toleranceInfo.differenceUSD?.toFixed(2) || 'N/A'}\n` +
+                          `**Tolerance:** $${toleranceInfo.toleranceUSD || '0.20'}`,
+                    inline: false
+                });
+            }
         }
         
         if (result.error) {
@@ -1513,7 +1614,7 @@ async function handleRefreshCommandsCommand(interaction) {
             console.log(`✅ Commands refreshed for guild: ${guild.name} (${guild.id})`);
             
             await interaction.followUp({
-                content: `✅ Commands have been refreshed for this server!\n\n🧪 **Test Mode:** ${config.TEST_MODE ? 'Enabled' : 'Disabled'}\n📝 **Commands registered:** ${commands.length}\n\n${config.TEST_MODE ? '✅ Test commands are now available:\n• `/test btc amount date` - Test BTC monitoring\n• `/test ltc amount date` - Test LTC monitoring\n• `/test simulate paymentid date` - Simulate payment\n• `/refreshcommands` - Refresh commands\n\n📅 **Date format:** YYYY-MM-DD or YYYY-MM-DD HH:MM\n📝 **Date is optional** - defaults to 24 hours ago' : '⚠️ Test commands are disabled (TEST_MODE=false)'}`,
+                content: `✅ Commands have been refreshed for this server!\n\n🧪 **Test Mode:** ${config.TEST_MODE ? 'Enabled' : 'Disabled'}\n📝 **Commands registered:** ${commands.length}\n\n${config.TEST_MODE ? '✅ Test commands are now available:\n• `/test btc amount date` - Test BTC monitoring\n• `/test ltc amount date` - Test LTC monitoring\n• `/test simulate paymentid date` - Simulate payment\n• `/refreshcommands` - Refresh commands\n\n📅 **Date format:** YYYY-MM-DD or YYYY-MM-DD HH:MM\n📝 **Date is optional** - defaults to 24 hours ago\n\n💰 **Payment Tolerance:** $0.20 USD for transaction fees\n📊 **Accepts:** Exact amount, overpayments, or within $0.20 tolerance' : '⚠️ Test commands are disabled (TEST_MODE=false)'}`,
                 ephemeral: true
             });
         } else {
@@ -2370,12 +2471,23 @@ if (config.TEST_MODE) {
                 cryptoConfig: {
                     BTC: {
                         address: CRYPTO_CONFIG.BTC.address,
-                        apiUrl: CRYPTO_CONFIG.BTC.apiUrl
+                        apiUrl: CRYPTO_CONFIG.BTC.apiUrl,
+                        toleranceUSD: CRYPTO_CONFIG.BTC.toleranceUSD
                     },
                     LTC: {
                         address: CRYPTO_CONFIG.LTC.address,
-                        apiUrl: CRYPTO_CONFIG.LTC.apiUrl
+                        apiUrl: CRYPTO_CONFIG.LTC.apiUrl,
+                        toleranceUSD: CRYPTO_CONFIG.LTC.toleranceUSD
                     }
+                },
+                toleranceInfo: {
+                    description: "Payments are accepted if they meet the exact amount, exceed it, or are within the tolerance range to account for transaction fees",
+                    toleranceUSD: "$0.20",
+                    acceptanceRules: [
+                        "✅ Exact amount or higher",
+                        "✅ Within $0.20 USD of expected amount",
+                        "❌ More than $0.20 USD below expected amount"
+                    ]
                 },
                 pendingPayments: cryptoPayments.filter(p => p.status === 'pending').length,
                 completedPayments: cryptoPayments.filter(p => p.status === 'completed').length,
